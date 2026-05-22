@@ -30,6 +30,8 @@ from pydantic import BaseModel
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+import repositories as repo
+
 # ============================================================
 # 全局配置
 # ============================================================
@@ -66,47 +68,55 @@ CASE_FILE_EXTENSIONS = {".yaml", ".yml", ".xlsx"}
 # 任务状态存储
 # ============================================================
 tasks_store: dict = {}
+repo.ensure_database()
 
 # ============================================================
 # 环境配置管理（JSON 持久化）
 # ============================================================
 
 def load_environments() -> list:
-    """从 JSON 文件加载环境配置列表"""
-    if not ENV_FILE.exists():
-        # 首次启动，创建默认环境
-        default_envs = [
-            {
-                "id": "test_env",
-                "name": "测试环境",
-                "base_url": "http://test-api.example.com",
-                "description": "日常测试环境",
-                "db_host": "test-mysql.internal",
-                "db_port": 3306,
-                "timeout": 30,
-            },
-            {
-                "id": "staging_env",
-                "name": "预发环境",
-                "base_url": "http://staging-api.example.com",
-                "description": "预发布验证环境",
-                "db_host": "staging-mysql.internal",
-                "db_port": 3306,
-                "timeout": 30,
-            },
-        ]
-        save_environments(default_envs)
-        return default_envs
+    """从数据库加载环境配置列表，兼容首次启动时的 JSON 文件导入"""
+    envs = repo.list_environments()
+    if envs:
+        return envs
 
-    try:
-        with open(ENV_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, Exception):
-        return []
+    if ENV_FILE.exists():
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                file_envs = json.load(f)
+            save_environments(file_envs)
+            return repo.list_environments()
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    default_envs = [
+        {
+            "id": "test_env",
+            "name": "测试环境",
+            "base_url": "http://test-api.example.com",
+            "description": "日常测试环境",
+            "db_host": "test-mysql.internal",
+            "db_port": 3306,
+            "timeout": 30,
+        },
+        {
+            "id": "staging_env",
+            "name": "预发环境",
+            "base_url": "http://staging-api.example.com",
+            "description": "预发布验证环境",
+            "db_host": "staging-mysql.internal",
+            "db_port": 3306,
+            "timeout": 30,
+        },
+    ]
+    save_environments(default_envs)
+    return default_envs
 
 
 def save_environments(envs: list):
-    """保存环境配置列表到 JSON 文件"""
+    """保存环境配置到数据库，并保留 JSON 快照便于人工查看"""
+    for env in envs:
+        repo.upsert_environment(env)
     with open(ENV_FILE, "w", encoding="utf-8") as f:
         json.dump(envs, f, ensure_ascii=False, indent=2)
 
@@ -243,11 +253,13 @@ def update_task_status(task_id: str, status: str, **kwargs):
                 tasks_store[task_id]["duration"] = str(finished - created)
             except (ValueError, TypeError):
                 pass
+        repo.update_task(task_id, **tasks_store[task_id])
 
 
 def save_task_log(task_id: str, stdout: str, stderr: str = ""):
     if task_id in tasks_store:
         tasks_store[task_id]["log"] = (stdout or "") + "\n" + (stderr or "")
+        repo.save_task_log(task_id, tasks_store[task_id]["log"])
 
 
 def get_script_type_info(suffix: str) -> dict:
@@ -605,6 +617,63 @@ def extract_summary_from_log(log: str) -> dict:
     return summary
 
 
+def _case_data_to_yaml(data: dict) -> str:
+    return yaml.dump(data or {"test_cases": []}, allow_unicode=True, default_flow_style=False)
+
+
+def bootstrap_database_from_files():
+    """Import existing file-based data on first run so the DB is immediately usable."""
+    load_environments()
+    if repo.list_modules():
+        return
+
+    for module_dir in sorted(DATA_DIR.iterdir()):
+        if not module_dir.is_dir() or module_dir.name.startswith("."):
+            continue
+        desc_file = module_dir / "_module.json"
+        description = ""
+        if desc_file.exists():
+            try:
+                with open(desc_file, "r", encoding="utf-8") as f:
+                    description = json.load(f).get("description", "")
+            except Exception:
+                description = ""
+        repo.upsert_module(module_dir.name, description)
+        for filepath in get_module_cases_files(module_dir):
+            if filepath.suffix.lower() == ".xlsx":
+                parsed = parse_excel_cases(filepath, module_dir.name)
+                file_type = "excel"
+            else:
+                parsed = parse_yaml_cases(filepath, module_dir.name)
+                file_type = "yaml"
+            data = parsed.get("data", {"test_module": module_dir.name, "test_cases": []})
+            raw_content = parsed.get("raw_content") or _case_data_to_yaml(data)
+            try:
+                source_path = str(filepath.relative_to(BASE_DIR))
+            except ValueError:
+                source_path = str(filepath)
+            repo.upsert_case_file(module_dir.name, filepath.name, file_type, data, raw_content, source_path)
+
+    root_files = [f for f in DATA_DIR.glob("*.yaml")] + [f for f in DATA_DIR.glob("*.yml")]
+    if root_files:
+        root_module = "根目录"
+        repo.upsert_module(root_module, "从 data 根目录迁移的历史用例")
+        for filepath in sorted(root_files):
+            parsed = parse_yaml_cases(filepath, root_module)
+            data = parsed.get("data", {"test_module": root_module, "test_cases": []})
+            repo.upsert_case_file(
+                root_module,
+                filepath.name,
+                "yaml",
+                data,
+                parsed.get("raw_content") or _case_data_to_yaml(data),
+                str(filepath.relative_to(BASE_DIR)),
+            )
+
+
+bootstrap_database_from_files()
+
+
 # ============================================================
 # 执行引擎
 # ============================================================
@@ -623,6 +692,7 @@ def run_pytest_task(task_id: str, env: str, markers: Optional[str] = None, testc
         command_parts.extend(["-m", markers])
 
     tasks_store[task_id]["command"] = " ".join(command_parts)
+    repo.update_task(task_id, command=tasks_store[task_id]["command"])
 
     try:
         result = subprocess.run(
@@ -642,8 +712,10 @@ def run_pytest_task(task_id: str, env: str, markers: Optional[str] = None, testc
                 capture_output=True, text=True, timeout=120,
             )
             tasks_store[task_id]["report_url"] = f"/reports/{task_id}/html/index.html"
+            repo.upsert_report(task_id, tasks_store[task_id]["report_url"], str(html_report_dir), True)
         except Exception:
             tasks_store[task_id]["report_url"] = f"/reports/{task_id}/"
+            repo.upsert_report(task_id, tasks_store[task_id]["report_url"], str(report_dir), False)
 
     except subprocess.TimeoutExpired:
         update_task_status(task_id, "ERROR")
@@ -672,6 +744,7 @@ def run_script_task(task_id: str, filename: str, args: Optional[str] = None):
         command_parts.extend(args.split())
 
     tasks_store[task_id]["command"] = " ".join(command_parts)
+    repo.update_task(task_id, command=tasks_store[task_id]["command"])
 
     try:
         result = subprocess.run(
@@ -739,12 +812,6 @@ async def get_environments():
 @app.post("/api/environments")
 async def create_environment(request: EnvCreateRequest):
     """新增执行环境"""
-    envs = load_environments()
-
-    # 检查 ID 唯一性
-    if any(e["id"] == request.id for e in envs):
-        raise HTTPException(status_code=400, detail=f"环境标识 '{request.id}' 已存在")
-
     new_env = {
         "id": request.id,
         "name": request.name,
@@ -754,10 +821,13 @@ async def create_environment(request: EnvCreateRequest):
         "db_port": request.db_port,
         "timeout": request.timeout,
     }
-    envs.append(new_env)
-    save_environments(envs)
+    try:
+        new_env = repo.create_environment(new_env)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"环境标识 '{request.id}' 已存在")
 
     # 同步更新 config.yaml 供 pytest 使用
+    envs = load_environments()
     _sync_config_yaml(envs)
 
     return {"message": f"环境 '{request.name}' 创建成功", "environment": new_env}
@@ -766,31 +836,21 @@ async def create_environment(request: EnvCreateRequest):
 @app.put("/api/environments")
 async def update_environment(request: EnvUpdateRequest):
     """更新执行环境"""
-    envs = load_environments()
-    target = None
-    for e in envs:
-        if e["id"] == request.id:
-            target = e
-            break
-
+    target = repo.update_environment(
+        request.id,
+        {
+            "name": request.name,
+            "base_url": request.base_url,
+            "description": request.description,
+            "db_host": request.db_host,
+            "db_port": request.db_port,
+            "timeout": request.timeout,
+        },
+    )
     if not target:
         raise HTTPException(status_code=404, detail=f"环境 '{request.id}' 不存在")
 
-    # 只更新提供了的字段
-    if request.name is not None:
-        target["name"] = request.name
-    if request.base_url is not None:
-        target["base_url"] = request.base_url
-    if request.description is not None:
-        target["description"] = request.description
-    if request.db_host is not None:
-        target["db_host"] = request.db_host
-    if request.db_port is not None:
-        target["db_port"] = request.db_port
-    if request.timeout is not None:
-        target["timeout"] = request.timeout
-
-    save_environments(envs)
+    envs = load_environments()
     _sync_config_yaml(envs)
 
     return {"message": f"环境 '{request.id}' 更新成功", "environment": target}
@@ -800,16 +860,15 @@ async def update_environment(request: EnvUpdateRequest):
 async def delete_environment(env_id: str):
     """删除执行环境"""
     envs = load_environments()
-    new_envs = [e for e in envs if e["id"] != env_id]
-
-    if len(new_envs) == len(envs):
-        raise HTTPException(status_code=404, detail=f"环境 '{env_id}' 不存在")
 
     # 至少保留一个环境
-    if len(new_envs) == 0:
+    if len(envs) <= 1:
         raise HTTPException(status_code=400, detail="至少需要保留一个执行环境")
 
-    save_environments(new_envs)
+    if not repo.delete_environment(env_id):
+        raise HTTPException(status_code=404, detail=f"环境 '{env_id}' 不存在")
+
+    new_envs = load_environments()
     _sync_config_yaml(new_envs)
 
     return {"message": f"环境 '{env_id}' 删除成功", "total": len(new_envs)}
@@ -836,36 +895,8 @@ def _sync_config_yaml(envs: list):
 
 @app.get("/api/modules")
 async def get_modules():
-    """获取所有用例模块（data/ 下的子目录）"""
-    modules = []
-    # 扫描 data/ 下的子目录
-    for d in sorted(DATA_DIR.iterdir()):
-        if d.is_dir() and not d.name.startswith("."):
-            case_files = get_module_cases_files(d)
-            # 检查是否有模块描述文件
-            desc_file = d / "_module.json"
-            description = ""
-            if desc_file.exists():
-                try:
-                    with open(desc_file, "r", encoding="utf-8") as f:
-                        mod_info = json.load(f)
-                        description = mod_info.get("description", "")
-                except Exception:
-                    pass
-
-            # 统计不同格式的用例数
-            yaml_count = len([f for f in case_files if f.suffix.lower() in (".yaml", ".yml")])
-            excel_count = len([f for f in case_files if f.suffix.lower() == ".xlsx"])
-
-            modules.append({
-                "name": d.name,
-                "description": description,
-                "case_count": len(case_files),
-                "yaml_count": yaml_count,
-                "excel_count": excel_count,
-                "path": str(d.relative_to(BASE_DIR)),
-            })
-
+    """获取所有用例模块"""
+    modules = repo.list_modules()
     return {"modules": modules, "total": len(modules)}
 
 
@@ -878,14 +909,10 @@ async def create_module(request: ModuleCreateRequest):
     if not module_name or not re.match(r'^[\w\u4e00-\u9fff]+$', module_name):
         raise HTTPException(status_code=400, detail="模块名称只能包含中文、字母、数字和下划线")
 
-    try:
-        module_dir = get_module_dir(module_name)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    if module_dir.exists():
+    if repo.get_module(module_name):
         raise HTTPException(status_code=400, detail=f"模块 '{module_name}' 已存在")
 
+    module_dir = get_module_dir(module_name)
     module_dir.mkdir(parents=True, exist_ok=True)
 
     # 写入模块描述文件
@@ -894,40 +921,51 @@ async def create_module(request: ModuleCreateRequest):
         with open(desc_file, "w", encoding="utf-8") as f:
             json.dump({"name": module_name, "description": request.description}, f, ensure_ascii=False, indent=2)
 
+    repo.create_module(module_name, request.description)
     return {"message": f"模块 '{module_name}' 创建成功", "name": module_name}
 
 
 @app.put("/api/modules")
 async def rename_module(request: ModuleRenameRequest):
     """重命名模块"""
+    if not request.new_name or not re.match(r'^[\w\u4e00-\u9fff]+$', request.new_name):
+        raise HTTPException(status_code=400, detail="非法模块名称")
+
+    if not repo.get_module(request.old_name):
+        raise HTTPException(status_code=404, detail=f"模块 '{request.old_name}' 不存在")
+    if repo.get_module(request.new_name):
+        raise HTTPException(status_code=400, detail=f"模块 '{request.new_name}' 已存在")
+
     try:
         old_dir = get_module_dir(request.old_name)
         new_dir = get_module_dir(request.new_name)
+        if old_dir.exists() and not new_dir.exists():
+            old_dir.rename(new_dir)
     except ValueError:
         raise HTTPException(status_code=400, detail="非法模块名称")
 
-    if not old_dir.exists():
-        raise HTTPException(status_code=404, detail=f"模块 '{request.old_name}' 不存在")
-    if new_dir.exists():
+    try:
+        repo.rename_module(request.old_name, request.new_name)
+    except ValueError:
         raise HTTPException(status_code=400, detail=f"模块 '{request.new_name}' 已存在")
-
-    old_dir.rename(new_dir)
     return {"message": f"模块 '{request.old_name}' 已重命名为 '{request.new_name}'"}
 
 
 @app.delete("/api/modules/{module_name}")
 async def delete_module(module_name: str):
     """删除模块及其所有用例"""
-    try:
-        module_dir = get_module_dir(module_name)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    if not module_dir.exists():
+    if not repo.get_module(module_name):
         raise HTTPException(status_code=404, detail=f"模块 '{module_name}' 不存在")
 
-    # 删除整个目录
-    shutil.rmtree(module_dir)
+    if not repo.delete_module(module_name):
+        raise HTTPException(status_code=404, detail=f"模块 '{module_name}' 不存在")
+
+    try:
+        module_dir = get_module_dir(module_name)
+        if module_dir.exists():
+            shutil.rmtree(module_dir)
+    except ValueError:
+        pass
     return {"message": f"模块 '{module_name}' 及其所有用例已删除"}
 
 
@@ -937,102 +975,67 @@ async def delete_module(module_name: str):
 
 @app.get("/api/cases")
 async def get_cases(module: Optional[str] = None):
-    """获取用例列表，支持按模块过滤，同时包含 YAML 和 Excel 用例"""
+    """获取用例列表，支持按模块过滤，同时包含 YAML 和 Excel 导入记录"""
     if module:
-        # 获取指定模块下的用例
-        try:
-            module_dir = get_module_dir(module)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="非法模块名称")
-        if not module_dir.exists():
+        if not repo.get_module(module):
             raise HTTPException(status_code=404, detail=f"模块 '{module}' 不存在")
-
-        case_files = get_module_cases_files(module_dir)
-        cases = []
-        for f in case_files:
-            if f.suffix.lower() == ".xlsx":
-                cases.append(parse_excel_cases(f, module))
-            else:
-                cases.append(parse_yaml_cases(f, module))
+        cases = repo.list_case_files(module)
         return {"cases": cases, "total": len(cases), "module": module}
     else:
-        # 获取所有模块的所有用例
-        all_cases = []
-        for d in sorted(DATA_DIR.iterdir()):
-            if d.is_dir() and not d.name.startswith("."):
-                case_files = get_module_cases_files(d)
-                for f in case_files:
-                    if f.suffix.lower() == ".xlsx":
-                        all_cases.append(parse_excel_cases(f, d.name))
-                    else:
-                        all_cases.append(parse_yaml_cases(f, d.name))
-        # 兼容：也扫描 data/ 根目录下的 YAML（非模块化用例）
-        root_yamls = [f for f in DATA_DIR.glob("*.yaml") if f.name != "environments.json"] + list(DATA_DIR.glob("*.yml"))
-        for f in sorted(root_yamls):
-            all_cases.append(parse_yaml_cases(f, "(根目录)"))
+        all_cases = repo.list_case_files()
         return {"cases": all_cases, "total": len(all_cases)}
 
 
 @app.get("/api/cases/{module}/{filename}")
 async def get_case_detail(module: str, filename: str):
     """获取单个用例文件详情"""
-    try:
-        module_dir = get_module_dir(module)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    filepath = module_dir / filename
-    if not filepath.exists():
+    case_data = repo.get_case_file(module, filename)
+    if not case_data:
         raise HTTPException(status_code=404, detail=f"文件 {module}/{filename} 不存在")
 
-    suffix = filepath.suffix.lower()
-    if suffix == ".xlsx":
-        case_data = parse_excel_cases(filepath, module)
-        # Excel 无法直接显示 raw_content，转为 YAML 展示
-        case_data["raw_content"] = yaml.dump(case_data.get("data", {}), allow_unicode=True, default_flow_style=False)
-    else:
-        case_data = parse_yaml_cases(filepath, module)
-        with open(filepath, "r", encoding="utf-8") as f:
-            case_data["raw_content"] = f.read()
+    if not case_data.get("raw_content"):
+        case_data["raw_content"] = _case_data_to_yaml(case_data.get("data", {}))
     return case_data
 
 
 @app.post("/api/cases/create")
 async def create_case(request: CaseCreateRequest):
     """在指定模块下创建用例文件（支持 YAML 和 Excel 格式）"""
-    try:
-        module_dir = get_module_dir(request.module)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    if not module_dir.exists():
+    if not repo.get_module(request.module):
         raise HTTPException(status_code=404, detail=f"模块 '{request.module}' 不存在")
 
+    module_dir = get_module_dir(request.module)
+    module_dir.mkdir(parents=True, exist_ok=True)
     file_type = request.file_type.lower()
     filename = request.filename
 
     if file_type == "excel":
-        # Excel 格式
         if not filename.endswith(".xlsx"):
             filename += ".xlsx"
-
         filepath = module_dir / filename
-        if filepath.exists():
+        if repo.get_case_file(request.module, filename):
             raise HTTPException(status_code=400, detail=f"文件 {filename} 已存在")
         if not str(filepath.resolve()).startswith(str(module_dir.resolve())):
             raise HTTPException(status_code=400, detail="非法文件路径")
 
-        # 创建带表头的空 Excel 文件
         _create_excel_template(filepath, request.module)
+        data = {"test_module": request.module, "test_cases": []}
+        repo.create_case_file(
+            request.module,
+            filename,
+            "excel",
+            data,
+            raw_content=_case_data_to_yaml(data),
+            source_path=str(filepath.relative_to(BASE_DIR)),
+        )
 
         return {"message": f"Excel 文件 {request.module}/{filename} 创建成功", "filename": filename, "module": request.module, "file_type": "excel"}
     else:
-        # YAML 格式（默认）
         if not filename.endswith((".yaml", ".yml")):
             filename += ".yaml"
 
         filepath = module_dir / filename
-        if filepath.exists():
+        if repo.get_case_file(request.module, filename):
             raise HTTPException(status_code=400, detail=f"文件 {filename} 已存在")
         if not str(filepath.resolve()).startswith(str(module_dir.resolve())):
             raise HTTPException(status_code=400, detail="非法文件路径")
@@ -1040,12 +1043,20 @@ async def create_case(request: CaseCreateRequest):
         content = request.content or f"# {request.module} - {filename}\ntest_module: {request.module}\ntest_cases: []\n"
         if content:
             try:
-                yaml.safe_load(content)
+                data = yaml.safe_load(content) or {"test_module": request.module, "test_cases": []}
             except yaml.YAMLError as e:
                 raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
+        repo.create_case_file(
+            request.module,
+            filename,
+            "yaml",
+            data,
+            raw_content=content,
+            source_path=str(filepath.relative_to(BASE_DIR)),
+        )
 
         return {"message": f"YAML 文件 {request.module}/{filename} 创建成功", "filename": filename, "module": request.module, "file_type": "yaml"}
 
@@ -1054,59 +1065,49 @@ async def create_case(request: CaseCreateRequest):
 async def update_case(request: CaseUpdateRequest):
     """更新用例数据（支持 YAML 和 Excel 格式）"""
     module = request.module or ""
-    if module:
-        try:
-            base = get_module_dir(module)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="非法模块名称")
-    else:
-        base = DATA_DIR
-
-    filepath = base / request.filename
-    if not str(filepath.resolve()).startswith(str(base.resolve())):
-        raise HTTPException(status_code=400, detail="非法文件路径")
-    if not filepath.exists():
+    if not module:
+        raise HTTPException(status_code=400, detail="请指定模块名称")
+    case_info = repo.get_case_file(module, request.filename)
+    if not case_info:
         raise HTTPException(status_code=404, detail=f"文件 {request.filename} 不存在")
 
-    suffix = filepath.suffix.lower()
-    if suffix == ".xlsx":
-        # Excel 文件：将 YAML 文本内容解析后写回 Excel
-        try:
-            data = yaml.safe_load(request.content)
-            _write_cases_to_excel(filepath, data)
-            return {"message": f"Excel 文件 {request.filename} 更新成功"}
-        except yaml.YAMLError as e:
-            raise HTTPException(status_code=400, detail=f"内容格式错误: {str(e)}")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"写入 Excel 失败: {str(e)}")
-    else:
-        # YAML 文件：直接写入
-        try:
-            yaml.safe_load(request.content)
-        except yaml.YAMLError as e:
-            raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
+    try:
+        data = yaml.safe_load(request.content) or {"test_module": module, "test_cases": []}
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
 
-        try:
+    repo.update_case_file(module, request.filename, data, raw_content=request.content)
+
+    try:
+        base = get_module_dir(module)
+        base.mkdir(parents=True, exist_ok=True)
+        filepath = base / request.filename
+        if not str(filepath.resolve()).startswith(str(base.resolve())):
+            raise HTTPException(status_code=400, detail="非法文件路径")
+        if case_info.get("file_type") == "excel":
+            _write_cases_to_excel(filepath, data)
+        else:
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(request.content)
-            return {"message": f"文件 {request.filename} 更新成功"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"写入文件失败: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"写入备份文件失败: {str(e)}")
+
+    return {"message": f"文件 {request.filename} 更新成功"}
 
 
 @app.delete("/api/cases/{module}/{filename}")
 async def delete_case(module: str, filename: str):
     """删除用例文件"""
-    try:
-        module_dir = get_module_dir(module)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    filepath = module_dir / filename
-    if not filepath.exists():
+    if not repo.delete_case_file(module, filename):
         raise HTTPException(status_code=404, detail=f"文件 {module}/{filename} 不存在")
 
-    filepath.unlink()
+    try:
+        module_dir = get_module_dir(module)
+        filepath = module_dir / filename
+        if filepath.exists() and str(filepath.resolve()).startswith(str(module_dir.resolve())):
+            filepath.unlink()
+    except ValueError:
+        pass
     return {"message": f"文件 {module}/{filename} 删除成功"}
 
 
@@ -1142,13 +1143,10 @@ async def import_excel_cases(
     if not module:
         raise HTTPException(status_code=400, detail="请指定导入的目标模块")
 
-    try:
-        module_dir = get_module_dir(module)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    if not module_dir.exists():
+    if not repo.get_module(module):
         raise HTTPException(status_code=404, detail=f"模块 '{module}' 不存在")
+    module_dir = get_module_dir(module)
+    module_dir.mkdir(parents=True, exist_ok=True)
 
     # 检查文件类型
     suffix = Path(file.filename).suffix.lower()
@@ -1167,14 +1165,31 @@ async def import_excel_cases(
 
     # 解析 Excel 内容
     case_data = parse_excel_cases(filepath, module)
+    data = case_data.get("data", {"test_module": module, "test_cases": []})
+    repo.upsert_case_file(
+        module,
+        import_filename,
+        "excel",
+        data,
+        raw_content=_case_data_to_yaml(data),
+        source_path=str(filepath.relative_to(BASE_DIR)),
+    )
 
     # 同时生成 YAML 版本（方便用户切换格式）
     yaml_filename = Path(import_filename).stem + ".yaml"
     yaml_filepath = module_dir / yaml_filename
-    if case_data.get("data") and not yaml_filepath.exists():
-        yaml_content = yaml.dump(case_data["data"], allow_unicode=True, default_flow_style=False)
+    if case_data.get("data") and not repo.get_case_file(module, yaml_filename):
+        yaml_content = yaml.dump(data, allow_unicode=True, default_flow_style=False)
         with open(yaml_filepath, "w", encoding="utf-8") as f:
             f.write(yaml_content)
+        repo.create_case_file(
+            module,
+            yaml_filename,
+            "yaml",
+            data,
+            raw_content=yaml_content,
+            source_path=str(yaml_filepath.relative_to(BASE_DIR)),
+        )
 
     return {
         "message": f"Excel 文件导入成功: {module}/{import_filename}",
@@ -1189,29 +1204,33 @@ async def import_excel_cases(
 @app.post("/api/cases/export-yaml/{module}/{filename}")
 async def export_yaml_from_excel(module: str, filename: str):
     """将 Excel 用例导出为 YAML 格式"""
-    try:
-        module_dir = get_module_dir(module)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    filepath = module_dir / filename
-    if not filepath.exists():
+    case_data = repo.get_case_file(module, filename)
+    if not case_data:
         raise HTTPException(status_code=404, detail=f"文件 {module}/{filename} 不存在")
 
-    if filepath.suffix.lower() != ".xlsx":
+    if case_data.get("file_type") != "excel":
         raise HTTPException(status_code=400, detail="仅支持将 Excel 文件导出为 YAML")
 
-    case_data = parse_excel_cases(filepath, module)
     yaml_filename = Path(filename).stem + ".yaml"
-    yaml_filepath = module_dir / yaml_filename
-
-    if yaml_filepath.exists():
+    if repo.get_case_file(module, yaml_filename):
         raise HTTPException(status_code=400, detail=f"YAML 文件 {yaml_filename} 已存在，请先删除")
+
+    module_dir = get_module_dir(module)
+    module_dir.mkdir(parents=True, exist_ok=True)
+    yaml_filepath = module_dir / yaml_filename
 
     if case_data.get("data"):
         yaml_content = yaml.dump(case_data["data"], allow_unicode=True, default_flow_style=False)
         with open(yaml_filepath, "w", encoding="utf-8") as f:
             f.write(yaml_content)
+        repo.create_case_file(
+            module,
+            yaml_filename,
+            "yaml",
+            case_data["data"],
+            raw_content=yaml_content,
+            source_path=str(yaml_filepath.relative_to(BASE_DIR)),
+        )
         return {"message": f"已导出 YAML 文件: {module}/{yaml_filename}", "yaml_filename": yaml_filename}
     else:
         raise HTTPException(status_code=400, detail="Excel 文件中无有效用例数据")
@@ -1220,27 +1239,31 @@ async def export_yaml_from_excel(module: str, filename: str):
 @app.post("/api/cases/export-excel/{module}/{filename}")
 async def export_excel_from_yaml(module: str, filename: str):
     """将 YAML 用例导出为 Excel 格式"""
-    try:
-        module_dir = get_module_dir(module)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="非法模块名称")
-
-    filepath = module_dir / filename
-    if not filepath.exists():
+    case_data = repo.get_case_file(module, filename)
+    if not case_data:
         raise HTTPException(status_code=404, detail=f"文件 {module}/{filename} 不存在")
 
-    if filepath.suffix.lower() not in (".yaml", ".yml"):
+    if case_data.get("file_type") != "yaml":
         raise HTTPException(status_code=400, detail="仅支持将 YAML 文件导出为 Excel")
 
-    case_data = parse_yaml_cases(filepath, module)
     excel_filename = Path(filename).stem + ".xlsx"
-    excel_filepath = module_dir / excel_filename
-
-    if excel_filepath.exists():
+    if repo.get_case_file(module, excel_filename):
         raise HTTPException(status_code=400, detail=f"Excel 文件 {excel_filename} 已存在，请先删除")
+
+    module_dir = get_module_dir(module)
+    module_dir.mkdir(parents=True, exist_ok=True)
+    excel_filepath = module_dir / excel_filename
 
     if case_data.get("data"):
         _write_cases_to_excel(excel_filepath, case_data["data"])
+        repo.create_case_file(
+            module,
+            excel_filename,
+            "excel",
+            case_data["data"],
+            raw_content=_case_data_to_yaml(case_data["data"]),
+            source_path=str(excel_filepath.relative_to(BASE_DIR)),
+        )
         return {"message": f"已导出 Excel 文件: {module}/{excel_filename}", "excel_filename": excel_filename}
     else:
         raise HTTPException(status_code=400, detail="YAML 文件中无有效用例数据")
@@ -1258,7 +1281,9 @@ async def get_scripts():
         return {"scripts": [], "total": 0}
     scripts = []
     for f in sorted(script_files):
-        scripts.append(parse_script_info(f))
+        info = parse_script_info(f)
+        repo.upsert_script(f.name, f.suffix.lower(), info["type_label"], f)
+        scripts.append(info)
     return {"scripts": scripts, "total": len(scripts)}
 
 
@@ -1288,6 +1313,8 @@ async def create_script(request: ScriptCreateRequest):
     content = request.content or f"# {request.description or request.filename}\n"
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
+    type_info = get_script_type_info(suffix)
+    repo.upsert_script(request.filename, suffix, type_info["label"], filepath, request.description)
     return {"message": f"脚本 {request.filename} 创建成功", "filename": request.filename}
 
 
@@ -1301,6 +1328,9 @@ async def update_script(request: ScriptUpdateRequest):
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(request.content)
+        suffix = filepath.suffix.lower()
+        type_info = get_script_type_info(suffix)
+        repo.upsert_script(request.filename, suffix, type_info["label"], filepath)
         return {"message": f"脚本 {request.filename} 更新成功"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1314,6 +1344,7 @@ async def delete_script(filename: str):
     if not str(filepath.resolve()).startswith(str(SCRIPTS_DIR.resolve())):
         raise HTTPException(status_code=400, detail="非法文件路径")
     filepath.unlink()
+    repo.delete_script_record(filename)
     return {"message": f"脚本 {filename} 删除成功"}
 
 
@@ -1328,6 +1359,8 @@ async def upload_script(file: UploadFile = File(...)):
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
+    type_info = get_script_type_info(suffix)
+    repo.upsert_script(file.filename, suffix, type_info["label"], filepath)
     return {"message": f"脚本 {file.filename} 上传成功", "filename": file.filename}
 
 
@@ -1350,6 +1383,7 @@ async def run_script(request: ScriptRunRequest):
         "task_type": "script", "script_name": request.filename,
         "finished_at": None, "duration": None, "exit_code": None, "log": None, "report_url": None,
     }
+    repo.create_task(tasks_store[task_id])
     thread = threading.Thread(target=run_script_task, args=(task_id, request.filename, request.args), daemon=True)
     thread.start()
     return {"task_id": task_id, "task_name": task_name, "status": "PENDING", "message": f"脚本 {request.filename} 已提交执行"}
@@ -1380,6 +1414,7 @@ async def run_tests(request: RunRequest):
         "task_type": "pytest", "script_name": None,
         "finished_at": None, "duration": None, "exit_code": None, "log": None, "report_url": None,
     }
+    repo.create_task(tasks_store[task_id])
     report_dir = REPORTS_DIR / task_id
     report_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1394,22 +1429,16 @@ async def run_tests(request: RunRequest):
 
 @app.get("/api/status/{task_id}")
 async def get_task_status(task_id: str):
-    if task_id not in tasks_store:
+    task = tasks_store.get(task_id) or repo.get_task(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-    task = tasks_store[task_id]
     summary = extract_summary_from_log(task.get("log", ""))
     return {**task, "summary": summary}
 
 
 @app.get("/api/tasks")
 async def get_tasks(limit: int = 20, status: Optional[str] = None, task_type: Optional[str] = None):
-    tasks = list(tasks_store.values())
-    if status:
-        tasks = [t for t in tasks if t["status"] == status]
-    if task_type:
-        tasks = [t for t in tasks if t.get("task_type") == task_type]
-    tasks.sort(key=lambda x: x["created_at"], reverse=True)
-    tasks = tasks[:limit]
+    tasks = repo.list_tasks(limit=limit, status=status, task_type=task_type)
     for task in tasks:
         task["summary"] = extract_summary_from_log(task.get("log", ""))
     return {"tasks": tasks, "total": len(tasks)}
@@ -1423,12 +1452,13 @@ async def get_tasks(limit: int = 20, status: Optional[str] = None, task_type: Op
 async def get_reports():
     if not REPORTS_DIR.exists():
         return {"reports": [], "total": 0}
+    reports_by_id = {r["task_id"]: r for r in repo.list_reports()}
     reports = []
     for d in sorted(REPORTS_DIR.iterdir(), reverse=True):
         if d.is_dir() and not d.name.startswith("."):
             html_dir = d / "html"
             has_html = html_dir.exists() and (html_dir / "index.html").exists()
-            task_info = tasks_store.get(d.name, {})
+            task_info = tasks_store.get(d.name) or repo.get_task(d.name) or reports_by_id.get(d.name, {})
             report_entry = {
                 "task_id": d.name,
                 "created_at": task_info.get("created_at", ""),
@@ -1443,15 +1473,23 @@ async def get_reports():
                 report_entry["summary"] = extract_summary_from_log(task_info.get("log", ""))
             else:
                 report_entry["summary"] = {}
+            repo.upsert_report(d.name, report_entry["report_url"], str(html_dir if has_html else d), has_html)
             reports.append(report_entry)
+    known_ids = {r["task_id"] for r in reports}
+    for report_entry in reports_by_id.values():
+        if report_entry["task_id"] in known_ids:
+            continue
+        report_entry["summary"] = extract_summary_from_log(report_entry.pop("log", ""))
+        reports.append(report_entry)
     return {"reports": reports, "total": len(reports)}
 
 
 @app.get("/api/log/{task_id}")
 async def get_task_log(task_id: str, tail: Optional[int] = None):
-    if task_id not in tasks_store:
+    task = tasks_store.get(task_id) or repo.get_task(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
-    log = tasks_store[task_id].get("log", "")
+    log = task.get("log", "")
     if tail and log:
         log = "\n".join(log.splitlines()[-tail:])
     return {"task_id": task_id, "log": log}

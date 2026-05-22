@@ -2,6 +2,7 @@
 Pytest 配置文件
 支持 --env 参数来切换执行环境
 """
+import sqlite3
 import pytest
 import yaml
 from pathlib import Path
@@ -21,7 +22,13 @@ def pytest_addoption(parser):
 def env_config(request):
     """根据 --env 参数加载对应环境配置"""
     env = request.config.getoption("--env")
-    config_path = Path(__file__).parent / "config.yaml"
+    base_dir = Path(__file__).parent
+
+    db_config = _load_env_from_db(base_dir, env)
+    if db_config:
+        return db_config
+
+    config_path = base_dir / "config.yaml"
 
     if config_path.exists():
         with open(config_path, "r", encoding="utf-8") as f:
@@ -36,6 +43,30 @@ def env_config(request):
             "base_url": "http://localhost:8080",
             "timeout": 30,
         }
+
+
+def _load_env_from_db(base_dir: Path, env_id: str):
+    """优先从 SQLite 数据库读取环境配置，失败时让调用方回退到 config.yaml。"""
+    db_path = base_dir / "data" / "tep.db"
+    if not db_path.exists():
+        return None
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT id, base_url, db_host, db_port, timeout FROM environments WHERE id = ?",
+                (env_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "base_url": row["base_url"],
+                "db_host": row["db_host"],
+                "db_port": row["db_port"],
+                "timeout": row["timeout"],
+            }
+    except sqlite3.Error:
+        return None
 
 
 @pytest.fixture(scope="session")
