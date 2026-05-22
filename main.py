@@ -23,7 +23,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
 
 # ============================================================
@@ -90,8 +90,8 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 if REPORTS_DIR.exists():
     app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR), html=True), name="reports")
 
-# Jinja2 模板
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Jinja2 模板引擎（直接使用 Jinja2，绕过 starlette 1.0 的 Jinja2Templates 缓存兼容问题）
+jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
 
 
 # ============================================================
@@ -272,22 +272,29 @@ def extract_summary_from_log(log: str) -> dict:
 # 页面路由
 # ============================================================
 
+def render_template(template_name: str, **context) -> HTMLResponse:
+    """渲染 Jinja2 模板并返回 HTMLResponse（兼容 starlette 1.0+）"""
+    template = jinja_env.get_template(template_name)
+    html = template.render(**context)
+    return HTMLResponse(html)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """首页 - 重定向到执行页面"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    """首页 - 执行中心"""
+    return render_template("index.html", request=request)
 
 
 @app.get("/cases", response_class=HTMLResponse)
 async def cases_page(request: Request):
     """用例管理页面"""
-    return templates.TemplateResponse("cases.html", {"request": request})
+    return render_template("cases.html", request=request)
 
 
 @app.get("/reports-page", response_class=HTMLResponse)
 async def reports_page(request: Request):
     """报告看板页面"""
-    return templates.TemplateResponse("reports.html", {"request": request})
+    return render_template("reports.html", request=request)
 
 
 # ============================================================
