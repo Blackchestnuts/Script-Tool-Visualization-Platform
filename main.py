@@ -120,6 +120,7 @@ class RunRequest(BaseModel):
     env: str = "test_env"
     markers: Optional[str] = None
     testcase_path: Optional[str] = None
+    task_name: Optional[str] = None  # 任务名称，方便识别
 
 
 class CaseUpdateRequest(BaseModel):
@@ -185,10 +186,12 @@ class ScriptCreateRequest(BaseModel):
 class ScriptRunRequest(BaseModel):
     filename: str
     args: Optional[str] = None
+    task_name: Optional[str] = None  # 任务名称，方便识别
 
 
 class TaskInfo(BaseModel):
     task_id: str
+    task_name: Optional[str] = None  # 任务名称
     env: str
     status: str
     command: str
@@ -1337,16 +1340,19 @@ async def run_script(request: ScriptRunRequest):
     if suffix not in SCRIPT_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的脚本类型: {suffix}")
 
+    # 自动生成默认任务名称
+    task_name = request.task_name or f"运行 {request.filename}"
+
     task_id = generate_task_id()
     tasks_store[task_id] = {
-        "task_id": task_id, "env": "script", "status": "PENDING", "command": "",
+        "task_id": task_id, "task_name": task_name, "env": "script", "status": "PENDING", "command": "",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "task_type": "script", "script_name": request.filename,
         "finished_at": None, "duration": None, "exit_code": None, "log": None, "report_url": None,
     }
     thread = threading.Thread(target=run_script_task, args=(task_id, request.filename, request.args), daemon=True)
     thread.start()
-    return {"task_id": task_id, "status": "PENDING", "message": f"脚本 {request.filename} 已提交执行"}
+    return {"task_id": task_id, "task_name": task_name, "status": "PENDING", "message": f"脚本 {request.filename} 已提交执行"}
 
 
 # ============================================================
@@ -1362,9 +1368,14 @@ async def run_tests(request: RunRequest):
     if request.env not in valid_env_ids:
         raise HTTPException(status_code=400, detail=f"无效的环境: {request.env}，可选: {valid_env_ids}")
 
+    # 自动生成默认任务名称
+    env_info = next((e for e in envs if e["id"] == request.env), None)
+    env_name = env_info["name"] if env_info else request.env
+    task_name = request.task_name or f"{env_name} 接口测试"
+
     task_id = generate_task_id()
     tasks_store[task_id] = {
-        "task_id": task_id, "env": request.env, "status": "PENDING", "command": "",
+        "task_id": task_id, "task_name": task_name, "env": request.env, "status": "PENDING", "command": "",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "task_type": "pytest", "script_name": None,
         "finished_at": None, "duration": None, "exit_code": None, "log": None, "report_url": None,
@@ -1378,7 +1389,7 @@ async def run_tests(request: RunRequest):
         daemon=True,
     )
     thread.start()
-    return {"task_id": task_id, "status": "PENDING", "message": "测试任务已提交"}
+    return {"task_id": task_id, "task_name": task_name, "status": "PENDING", "message": "测试任务已提交"}
 
 
 @app.get("/api/status/{task_id}")

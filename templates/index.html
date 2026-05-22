@@ -10,7 +10,7 @@
     <nav class="navbar">
         <div class="nav-brand">
             <span class="nav-logo">TEP</span>
-            <span class="nav-title">测试效能平台 V1.2</span>
+            <span class="nav-title">测试效能平台 V1.3</span>
         </div>
         <div class="nav-links">
             <a href="/" class="nav-link active">执行中心</a>
@@ -42,6 +42,10 @@
                     </div>
                 </div>
                 <div class="form-row">
+                    <div class="form-group">
+                        <label for="taskNameInput">任务名称</label>
+                        <input type="text" id="taskNameInput" class="form-control" placeholder="例: 登录模块回归测试（可选，留空自动生成）">
+                    </div>
                     <div class="form-group" style="flex:1">
                         <label for="testpathInput">测试路径（可选）</label>
                         <input type="text" id="testpathInput" class="form-control" placeholder="例: testcases/test_api.py">
@@ -63,7 +67,8 @@
             </div>
             <div class="card-body">
                 <div class="task-info-grid">
-                    <div class="task-info-item"><span class="info-label">任务 ID</span><span class="info-value" id="currentTaskId">-</span></div>
+                    <div class="task-info-item"><span class="info-label">任务名称</span><span class="info-value" id="currentTaskName">-</span></div>
+                    <div class="task-info-item"><span class="info-label">任务 ID</span><span class="info-value code" id="currentTaskId">-</span></div>
                     <div class="task-info-item"><span class="info-label">执行环境</span><span class="info-value" id="currentTaskEnv">-</span></div>
                     <div class="task-info-item"><span class="info-label">执行命令</span><span class="info-value code" id="currentTaskCmd">-</span></div>
                     <div class="task-info-item"><span class="info-label">开始时间</span><span class="info-value" id="currentTaskStart">-</span></div>
@@ -92,7 +97,7 @@
                 <div class="table-wrapper">
                     <table class="data-table" id="taskTable">
                         <thead>
-                            <tr><th>任务 ID</th><th>类型</th><th>环境/脚本</th><th>状态</th><th>通过/失败</th><th>耗时</th><th>开始时间</th><th>操作</th></tr>
+                            <tr><th>任务名称</th><th>任务 ID</th><th>类型</th><th>环境/脚本</th><th>状态</th><th>通过/失败</th><th>耗时</th><th>开始时间</th><th>操作</th></tr>
                         </thead>
                         <tbody id="taskTableBody">
                             <tr><td colspan="8" class="empty-text">暂无执行记录</td></tr>
@@ -307,6 +312,7 @@
             const env = document.getElementById('envSelect').value;
             const markers = document.getElementById('markerInput').value.trim() || null;
             const testcase_path = document.getElementById('testpathInput').value.trim() || null;
+            const task_name = document.getElementById('taskNameInput').value.trim() || null;
             const runBtn = document.getElementById('runBtn');
             runBtn.disabled = true;
             runBtn.innerHTML = '<span class="spinner"></span> 提交中...';
@@ -314,20 +320,21 @@
                 const resp = await fetch('/api/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ env, markers, testcase_path }),
+                    body: JSON.stringify({ env, markers, testcase_path, task_name }),
                 });
                 const data = await resp.json();
                 if (resp.ok) {
-                    showToast('任务已提交', `任务ID: ${data.task_id}`, 'success');
-                    showCurrentTask(data.task_id, env);
+                    showToast('任务已提交', `任务: ${data.task_name || data.task_id}`, 'success');
+                    showCurrentTask(data.task_id, env, data.task_name);
                     startPolling(data.task_id);
                 } else { showToast('提交失败', data.detail, 'error'); }
             } catch (e) { showToast('网络错误', e.message, 'error'); }
             finally { runBtn.disabled = false; runBtn.innerHTML = '<span class="btn-icon">▶</span> 执行测试'; }
         }
 
-        function showCurrentTask(taskId, env) {
+        function showCurrentTask(taskId, env, taskName) {
             document.getElementById('currentTaskCard').style.display = 'block';
+            document.getElementById('currentTaskName').textContent = taskName || '-';
             document.getElementById('currentTaskId').textContent = taskId;
             document.getElementById('currentTaskEnv').textContent = env;
             document.getElementById('currentTaskStatus').textContent = 'PENDING';
@@ -346,6 +353,7 @@
                     const resp = await fetch(`/api/status/${taskId}`);
                     const data = await resp.json();
                     document.getElementById('currentTaskStatus').textContent = data.status;
+                    document.getElementById('currentTaskName').textContent = data.task_name || '-';
                     document.getElementById('currentTaskCmd').textContent = data.command || '-';
                     document.getElementById('currentTaskStart').textContent = data.created_at || '-';
                     document.getElementById('currentTaskDuration').textContent = data.duration || '-';
@@ -391,7 +399,7 @@
         function renderTaskTable(tasks) {
             const tbody = document.getElementById('taskTableBody');
             if (!tasks || tasks.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="empty-text">暂无执行记录</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-text">暂无执行记录</td></tr>';
                 return;
             }
             tbody.innerHTML = tasks.map(t => {
@@ -400,8 +408,10 @@
                 const summaryText = t.summary && t.summary.total !== null ? `${t.summary.passed||0}/${t.summary.failed||0}` : '-';
                 const reportBtn = t.report_url ? `<a href="${t.report_url}" target="_blank" class="btn btn-sm btn-success">报告</a>` : '';
                 const envLabel = t.task_type === 'script' ? (t.script_name || '-') : (t.env || '-');
+                const displayName = t.task_name || '-';
                 return `<tr>
-                    <td class="mono">${t.task_id}</td>
+                    <td><strong>${escapeHtml(displayName)}</strong></td>
+                    <td class="mono" style="font-size:11px;color:var(--gray-400);">${t.task_id}</td>
                     <td>${typeBadge}</td>
                     <td>${escapeHtml(envLabel)}</td>
                     <td>${statusBadge}</td>
@@ -419,6 +429,7 @@
                 const data = await resp.json();
                 document.getElementById('currentTaskCard').style.display = 'block';
                 document.getElementById('logContent').textContent = data.log || '无日志';
+                document.getElementById('currentTaskName').textContent = '(历史)';
                 document.getElementById('currentTaskId').textContent = taskId;
             } catch (e) { showToast('获取日志失败', e.message, 'error'); }
         }

@@ -11,7 +11,7 @@
     <nav class="navbar">
         <div class="nav-brand">
             <span class="nav-logo">TEP</span>
-            <span class="nav-title">测试效能平台 V1.2</span>
+            <span class="nav-title">测试效能平台 V1.3</span>
         </div>
         <div class="nav-links">
             <a href="/" class="nav-link">执行中心</a>
@@ -95,6 +95,10 @@
             <div class="card-body">
                 <div class="task-info-grid">
                     <div class="task-info-item">
+                        <span class="info-label">任务名称</span>
+                        <span class="info-value" id="runTaskNameDisplay">-</span>
+                    </div>
+                    <div class="task-info-item">
                         <span class="info-label">任务 ID</span>
                         <span class="info-value mono" id="runTaskId">-</span>
                     </div>
@@ -156,6 +160,10 @@
             </div>
             <div class="modal-body">
                 <div class="form-group">
+                    <label>任务名称</label>
+                    <input type="text" id="runTaskName" class="form-control" placeholder="例: 冒烟测试脚本（可选，留空自动生成）">
+                </div>
+                <div class="form-group" style="margin-top:12px;">
                     <label>命令行参数（可选）</label>
                     <input type="text" id="runArgs" class="form-control" placeholder="例: --env=test --count=10">
                     <small>参数将以空格分隔传递给脚本</small>
@@ -283,6 +291,7 @@
             pendingRunFilename = filename;
             document.getElementById('runModalFilename').textContent = filename;
             document.getElementById('runArgs').value = '';
+            document.getElementById('runTaskName').value = '';
             document.getElementById('runModal').style.display = 'flex';
         }
 
@@ -294,29 +303,30 @@
         async function confirmRunScript() {
             if (!pendingRunFilename) return;
             const args = document.getElementById('runArgs').value.trim() || null;
+            const task_name = document.getElementById('runTaskName').value.trim() || null;
             hideRunModal();
-            await executeScript(pendingRunFilename, args);
+            await executeScript(pendingRunFilename, args, task_name);
         }
 
         async function runCurrentScript() {
             if (!currentEditingFile) return;
             // 先保存再运行
             await saveScript();
-            await executeScript(currentEditingFile, null);
+            await executeScript(currentEditingFile, null, null);
         }
 
-        async function executeScript(filename, args) {
+        async function executeScript(filename, args, taskName) {
             try {
                 const resp = await fetch('/api/scripts/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename, args }),
+                    body: JSON.stringify({ filename, args, task_name: taskName }),
                 });
                 const data = await resp.json();
 
                 if (resp.ok) {
-                    showToast('已提交执行', `任务ID: ${data.task_id}`, 'success');
-                    showRunStatus(filename, data.task_id);
+                    showToast('已提交执行', `任务: ${data.task_name || data.task_id}`, 'success');
+                    showRunStatus(filename, data.task_id, data.task_name);
                     startScriptPolling(data.task_id);
                 } else {
                     showToast('执行失败', data.detail, 'error');
@@ -326,10 +336,11 @@
             }
         }
 
-        function showRunStatus(filename, taskId) {
+        function showRunStatus(filename, taskId, taskName) {
             const card = document.getElementById('runStatusCard');
             card.style.display = 'block';
             document.getElementById('runScriptName').textContent = filename;
+            document.getElementById('runTaskNameDisplay').textContent = taskName || '-';
             document.getElementById('runTaskId').textContent = taskId;
             document.getElementById('runStatusBadge').textContent = 'PENDING';
             document.getElementById('runStatusBadge').className = 'badge badge-warning';
