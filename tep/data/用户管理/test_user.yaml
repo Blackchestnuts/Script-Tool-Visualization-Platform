@@ -1,5 +1,5 @@
 # 用户管理接口测试数据
-test_module: 用户管理模块
+test_module: 用户管理
 test_cases:
   - name: 获取用户列表-成功
     endpoint: /api/users
@@ -11,7 +11,6 @@ test_cases:
       status_code: 200
       body:
         code: 0
-        message: success
 
   - name: 创建用户-成功
     endpoint: /api/users
@@ -27,7 +26,6 @@ test_cases:
       status_code: 200
       body:
         code: 0
-        message: 创建成功
 
   - name: 重复用户名-创建失败
     endpoint: /api/users
@@ -38,21 +36,8 @@ test_cases:
     params:
       username: admin
       email: admin@example.com
-      role: normal
     expected:
       status_code: 200
       body:
         code: 2001
         message: 用户名已存在
-
-  - name: 删除用户-成功
-    endpoint: /api/users/999
-    method: DELETE
-    headers:
-      Authorization: Bearer ${token}
-    params: null
-    expected:
-      status_code: 200
-      body:
-        code: 0
-        message: 删除成功

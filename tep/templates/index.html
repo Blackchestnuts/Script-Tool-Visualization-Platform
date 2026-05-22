@@ -3,15 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>测试效能平台 TEP V1.0 - 执行中心</title>
+    <title>测试效能平台 TEP - 执行中心</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <!-- 导航栏 -->
     <nav class="navbar">
         <div class="nav-brand">
             <span class="nav-logo">TEP</span>
-            <span class="nav-title">测试效能平台 V1.1</span>
+            <span class="nav-title">测试效能平台 V1.2</span>
         </div>
         <div class="nav-links">
             <a href="/" class="nav-link active">执行中心</a>
@@ -21,7 +20,6 @@
         </div>
     </nav>
 
-    <!-- 主内容区 -->
     <main class="main-content">
         <!-- 执行面板 -->
         <section class="card">
@@ -33,10 +31,10 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="envSelect">执行环境</label>
-                        <select id="envSelect" class="form-control">
-                            <option value="test_env">测试环境 (test_env)</option>
-                            <option value="staging_env">预发环境 (staging_env)</option>
-                        </select>
+                        <div class="env-select-row">
+                            <select id="envSelect" class="form-control"></select>
+                            <button class="btn btn-sm btn-outline" onclick="showEnvManager()">管理环境</button>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="markerInput">Markers 过滤（可选）</label>
@@ -45,7 +43,7 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group" style="flex:1">
-                        <label for="testpathInput">测试路径（可选，默认全部）</label>
+                        <label for="testpathInput">测试路径（可选）</label>
                         <input type="text" id="testpathInput" class="form-control" placeholder="例: testcases/test_api.py">
                     </div>
                 </div>
@@ -65,28 +63,12 @@
             </div>
             <div class="card-body">
                 <div class="task-info-grid">
-                    <div class="task-info-item">
-                        <span class="info-label">任务 ID</span>
-                        <span class="info-value" id="currentTaskId">-</span>
-                    </div>
-                    <div class="task-info-item">
-                        <span class="info-label">执行环境</span>
-                        <span class="info-value" id="currentTaskEnv">-</span>
-                    </div>
-                    <div class="task-info-item">
-                        <span class="info-label">执行命令</span>
-                        <span class="info-value code" id="currentTaskCmd">-</span>
-                    </div>
-                    <div class="task-info-item">
-                        <span class="info-label">开始时间</span>
-                        <span class="info-value" id="currentTaskStart">-</span>
-                    </div>
-                    <div class="task-info-item">
-                        <span class="info-label">耗时</span>
-                        <span class="info-value" id="currentTaskDuration">-</span>
-                    </div>
+                    <div class="task-info-item"><span class="info-label">任务 ID</span><span class="info-value" id="currentTaskId">-</span></div>
+                    <div class="task-info-item"><span class="info-label">执行环境</span><span class="info-value" id="currentTaskEnv">-</span></div>
+                    <div class="task-info-item"><span class="info-label">执行命令</span><span class="info-value code" id="currentTaskCmd">-</span></div>
+                    <div class="task-info-item"><span class="info-label">开始时间</span><span class="info-value" id="currentTaskStart">-</span></div>
+                    <div class="task-info-item"><span class="info-label">耗时</span><span class="info-value" id="currentTaskDuration">-</span></div>
                 </div>
-                <!-- 日志区域 -->
                 <div class="log-section">
                     <div class="log-header">
                         <span>实时日志</span>
@@ -94,11 +76,8 @@
                     </div>
                     <pre class="log-content" id="logContent">等待执行...</pre>
                 </div>
-                <!-- 报告链接 -->
                 <div class="report-link-section" id="reportLinkSection" style="display:none;">
-                    <a id="reportLink" href="#" target="_blank" class="btn btn-success">
-                        📊 查看 Allure 报告
-                    </a>
+                    <a id="reportLink" href="#" target="_blank" class="btn btn-success">📊 查看 Allure 报告</a>
                 </div>
             </div>
         </section>
@@ -113,18 +92,10 @@
                 <div class="table-wrapper">
                     <table class="data-table" id="taskTable">
                         <thead>
-                            <tr>
-                                <th>任务 ID</th>
-                                <th>环境</th>
-                                <th>状态</th>
-                                <th>通过/失败</th>
-                                <th>耗时</th>
-                                <th>开始时间</th>
-                                <th>操作</th>
-                            </tr>
+                            <tr><th>任务 ID</th><th>类型</th><th>环境/脚本</th><th>状态</th><th>通过/失败</th><th>耗时</th><th>开始时间</th><th>操作</th></tr>
                         </thead>
                         <tbody id="taskTableBody">
-                            <tr><td colspan="7" class="empty-text">暂无执行记录</td></tr>
+                            <tr><td colspan="8" class="empty-text">暂无执行记录</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -132,27 +103,213 @@
         </section>
     </main>
 
+    <!-- 环境管理弹窗 -->
+    <div class="modal-overlay" id="envManagerModal" style="display:none;">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3>执行环境管理</h3>
+                <button class="modal-close" onclick="hideEnvManager()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="env-list" id="envListContainer"></div>
+                <hr style="margin: 16px 0; border-color: var(--gray-200);">
+                <h4 style="margin-bottom: 12px;">新增环境</h4>
+                <div class="form-row">
+                    <div class="form-group"><label>环境 ID</label><input type="text" id="newEnvId" class="form-control" placeholder="例: prod_env"></div>
+                    <div class="form-group"><label>环境名称</label><input type="text" id="newEnvName" class="form-control" placeholder="例: 生产环境"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>Base URL</label><input type="text" id="newEnvBaseUrl" class="form-control" placeholder="例: http://api.example.com"></div>
+                    <div class="form-group"><label>描述</label><input type="text" id="newEnvDesc" class="form-control" placeholder="例: 正式生产环境"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>数据库地址</label><input type="text" id="newEnvDbHost" class="form-control" placeholder="例: prod-mysql.internal"></div>
+                    <div class="form-group"><label>数据库端口</label><input type="number" id="newEnvDbPort" class="form-control" value="3306"></div>
+                    <div class="form-group"><label>超时(秒)</label><input type="number" id="newEnvTimeout" class="form-control" value="30"></div>
+                </div>
+                <button class="btn btn-primary" onclick="createEnvironment()">添加环境</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑环境弹窗 -->
+    <div class="modal-overlay" id="editEnvModal" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>编辑环境 - <span id="editEnvTitle">-</span></h3>
+                <button class="modal-close" onclick="hideEditEnvModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editEnvId">
+                <div class="form-row">
+                    <div class="form-group"><label>环境名称</label><input type="text" id="editEnvName" class="form-control"></div>
+                    <div class="form-group"><label>Base URL</label><input type="text" id="editEnvBaseUrl" class="form-control"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>描述</label><input type="text" id="editEnvDesc" class="form-control"></div>
+                    <div class="form-group"><label>数据库地址</label><input type="text" id="editEnvDbHost" class="form-control"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>数据库端口</label><input type="number" id="editEnvDbPort" class="form-control"></div>
+                    <div class="form-group"><label>超时(秒)</label><input type="number" id="editEnvTimeout" class="form-control"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="hideEditEnvModal()">取消</button>
+                <button class="btn btn-primary" onclick="updateEnvironment()">保存</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
     <script>
-        // 健康检查
-        checkHealth();
-
-        // 加载历史任务
-        loadTasks();
-
-        // 轮询变量
         let pollingTimer = null;
 
-        // 触发执行
+        checkHealth();
+        loadEnvironments();
+        loadTasks();
+
+        // ---- 环境加载 ----
+        async function loadEnvironments() {
+            try {
+                const resp = await fetch('/api/environments');
+                const data = await resp.json();
+                renderEnvSelect(data.environments);
+            } catch (e) { console.error(e); }
+        }
+
+        function renderEnvSelect(envs) {
+            const sel = document.getElementById('envSelect');
+            sel.innerHTML = envs.map(e =>
+                `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)} (${e.id})</option>`
+            ).join('');
+        }
+
+        // ---- 环境管理 ----
+        function showEnvManager() {
+            loadEnvList();
+            document.getElementById('envManagerModal').style.display = 'flex';
+        }
+        function hideEnvManager() { document.getElementById('envManagerModal').style.display = 'none'; }
+
+        async function loadEnvList() {
+            try {
+                const resp = await fetch('/api/environments');
+                const data = await resp.json();
+                const container = document.getElementById('envListContainer');
+                if (!data.environments || data.environments.length === 0) {
+                    container.innerHTML = '<div class="empty-text">暂无环境</div>';
+                    return;
+                }
+                container.innerHTML = data.environments.map(e => `
+                    <div class="env-card">
+                        <div class="env-card-header">
+                            <span class="env-name">${escapeHtml(e.name)}</span>
+                            <span class="badge badge-info">${escapeHtml(e.id)}</span>
+                        </div>
+                        <div class="env-card-body">
+                            ${e.base_url ? `<div><span class="info-label">Base URL:</span> ${escapeHtml(e.base_url)}</div>` : ''}
+                            ${e.description ? `<div><span class="info-label">描述:</span> ${escapeHtml(e.description)}</div>` : ''}
+                            ${e.db_host ? `<div><span class="info-label">数据库:</span> ${escapeHtml(e.db_host)}:${e.db_port}</div>` : ''}
+                            <div><span class="info-label">超时:</span> ${e.timeout}s</div>
+                        </div>
+                        <div class="env-card-actions">
+                            <button class="btn btn-sm btn-outline" onclick='editEnvironment(${JSON.stringify(e).replace(/'/g, "&#39;")})'>编辑</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteEnvironment('${escapeHtml(e.id)}')">删除</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) { showToast('加载环境失败', e.message, 'error'); }
+        }
+
+        async function createEnvironment() {
+            const body = {
+                id: document.getElementById('newEnvId').value.trim(),
+                name: document.getElementById('newEnvName').value.trim(),
+                base_url: document.getElementById('newEnvBaseUrl').value.trim(),
+                description: document.getElementById('newEnvDesc').value.trim(),
+                db_host: document.getElementById('newEnvDbHost').value.trim(),
+                db_port: parseInt(document.getElementById('newEnvDbPort').value) || 3306,
+                timeout: parseInt(document.getElementById('newEnvTimeout').value) || 30,
+            };
+            if (!body.id || !body.name) { showToast('ID和名称必填', '', 'error'); return; }
+            try {
+                const resp = await fetch('/api/environments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('创建成功', data.message, 'success');
+                    loadEnvList();
+                    loadEnvironments();
+                    // 清空表单
+                    ['newEnvId','newEnvName','newEnvBaseUrl','newEnvDesc','newEnvDbHost'].forEach(id => document.getElementById(id).value = '');
+                } else { showToast('创建失败', data.detail, 'error'); }
+            } catch (e) { showToast('创建失败', e.message, 'error'); }
+        }
+
+        function editEnvironment(env) {
+            document.getElementById('editEnvId').value = env.id;
+            document.getElementById('editEnvTitle').textContent = env.name;
+            document.getElementById('editEnvName').value = env.name || '';
+            document.getElementById('editEnvBaseUrl').value = env.base_url || '';
+            document.getElementById('editEnvDesc').value = env.description || '';
+            document.getElementById('editEnvDbHost').value = env.db_host || '';
+            document.getElementById('editEnvDbPort').value = env.db_port || 3306;
+            document.getElementById('editEnvTimeout').value = env.timeout || 30;
+            document.getElementById('editEnvModal').style.display = 'flex';
+        }
+        function hideEditEnvModal() { document.getElementById('editEnvModal').style.display = 'none'; }
+
+        async function updateEnvironment() {
+            const body = {
+                id: document.getElementById('editEnvId').value,
+                name: document.getElementById('editEnvName').value.trim(),
+                base_url: document.getElementById('editEnvBaseUrl').value.trim(),
+                description: document.getElementById('editEnvDesc').value.trim(),
+                db_host: document.getElementById('editEnvDbHost').value.trim(),
+                db_port: parseInt(document.getElementById('editEnvDbPort').value) || 3306,
+                timeout: parseInt(document.getElementById('editEnvTimeout').value) || 30,
+            };
+            try {
+                const resp = await fetch('/api/environments', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('更新成功', data.message, 'success');
+                    hideEditEnvModal();
+                    loadEnvList();
+                    loadEnvironments();
+                } else { showToast('更新失败', data.detail, 'error'); }
+            } catch (e) { showToast('更新失败', e.message, 'error'); }
+        }
+
+        async function deleteEnvironment(envId) {
+            if (!confirm(`确定删除环境「${envId}」？`)) return;
+            try {
+                const resp = await fetch(`/api/environments/${encodeURIComponent(envId)}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('删除成功', data.message, 'success');
+                    loadEnvList();
+                    loadEnvironments();
+                } else { showToast('删除失败', data.detail, 'error'); }
+            } catch (e) { showToast('删除失败', e.message, 'error'); }
+        }
+
+        // ---- 执行测试 ----
         async function triggerRun() {
             const env = document.getElementById('envSelect').value;
             const markers = document.getElementById('markerInput').value.trim() || null;
             const testcase_path = document.getElementById('testpathInput').value.trim() || null;
-
             const runBtn = document.getElementById('runBtn');
             runBtn.disabled = true;
             runBtn.innerHTML = '<span class="spinner"></span> 提交中...';
-
             try {
                 const resp = await fetch('/api/run', {
                     method: 'POST',
@@ -160,27 +317,17 @@
                     body: JSON.stringify({ env, markers, testcase_path }),
                 });
                 const data = await resp.json();
-
                 if (resp.ok) {
                     showToast('任务已提交', `任务ID: ${data.task_id}`, 'success');
-                    // 显示当前任务面板
                     showCurrentTask(data.task_id, env);
-                    // 开始轮询
                     startPolling(data.task_id);
-                } else {
-                    showToast('提交失败', data.detail || '未知错误', 'error');
-                }
-            } catch (e) {
-                showToast('网络错误', e.message, 'error');
-            } finally {
-                runBtn.disabled = false;
-                runBtn.innerHTML = '<span class="btn-icon">▶</span> 执行测试';
-            }
+                } else { showToast('提交失败', data.detail, 'error'); }
+            } catch (e) { showToast('网络错误', e.message, 'error'); }
+            finally { runBtn.disabled = false; runBtn.innerHTML = '<span class="btn-icon">▶</span> 执行测试'; }
         }
 
         function showCurrentTask(taskId, env) {
-            const card = document.getElementById('currentTaskCard');
-            card.style.display = 'block';
+            document.getElementById('currentTaskCard').style.display = 'block';
             document.getElementById('currentTaskId').textContent = taskId;
             document.getElementById('currentTaskEnv').textContent = env;
             document.getElementById('currentTaskStatus').textContent = 'PENDING';
@@ -194,18 +341,14 @@
 
         function startPolling(taskId) {
             if (pollingTimer) clearInterval(pollingTimer);
-
             pollingTimer = setInterval(async () => {
                 try {
                     const resp = await fetch(`/api/status/${taskId}`);
                     const data = await resp.json();
-
-                    // 更新状态
                     document.getElementById('currentTaskStatus').textContent = data.status;
                     document.getElementById('currentTaskCmd').textContent = data.command || '-';
                     document.getElementById('currentTaskStart').textContent = data.created_at || '-';
                     document.getElementById('currentTaskDuration').textContent = data.duration || '-';
-
                     if (data.status === 'RUNNING') {
                         document.getElementById('currentTaskStatus').className = 'badge badge-info';
                     } else if (data.status === 'FINISHED') {
@@ -219,74 +362,53 @@
                         showToast('执行出错', `任务 ${taskId} 执行失败`, 'error');
                         loadTasks();
                     }
-
-                    // 更新日志
                     if (data.log) {
                         document.getElementById('logContent').textContent = data.log;
-                        autoScrollLog();
+                        document.getElementById('logContent').scrollTop = document.getElementById('logContent').scrollHeight;
                     }
-
-                    // 显示报告链接
                     if (data.report_url && (data.status === 'FINISHED' || data.status === 'ERROR')) {
                         document.getElementById('reportLinkSection').style.display = 'block';
                         document.getElementById('reportLink').href = data.report_url;
                     }
-
-                    // 更新通过/失败
                     if (data.summary && data.summary.total !== null) {
                         document.getElementById('currentTaskDuration').textContent =
                             `${data.duration || '-'} (${data.summary.passed || 0}通过 / ${data.summary.failed || 0}失败)`;
                     }
-                } catch (e) {
-                    console.error('轮询错误:', e);
-                }
+                } catch (e) { console.error(e); }
             }, 2000);
         }
 
-        function stopPolling() {
-            if (pollingTimer) {
-                clearInterval(pollingTimer);
-                pollingTimer = null;
-            }
-        }
+        function stopPolling() { if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null; } }
 
         async function loadTasks() {
             try {
                 const resp = await fetch('/api/tasks?limit=20');
                 const data = await resp.json();
                 renderTaskTable(data.tasks);
-            } catch (e) {
-                console.error('加载任务列表失败:', e);
-            }
+            } catch (e) { console.error(e); }
         }
 
         function renderTaskTable(tasks) {
             const tbody = document.getElementById('taskTableBody');
             if (!tasks || tasks.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-text">暂无执行记录</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-text">暂无执行记录</td></tr>';
                 return;
             }
-
             tbody.innerHTML = tasks.map(t => {
                 const statusBadge = getStatusBadge(t.status);
-                const summaryText = t.summary && t.summary.total !== null
-                    ? `${t.summary.passed || 0}/${t.summary.failed || 0}`
-                    : '-';
-                const reportBtn = t.report_url
-                    ? `<a href="${t.report_url}" target="_blank" class="btn btn-sm btn-success">报告</a>`
-                    : '';
-
+                const typeBadge = t.task_type === 'script' ? '<span class="badge badge-warning">脚本</span>' : '<span class="badge badge-info">Pytest</span>';
+                const summaryText = t.summary && t.summary.total !== null ? `${t.summary.passed||0}/${t.summary.failed||0}` : '-';
+                const reportBtn = t.report_url ? `<a href="${t.report_url}" target="_blank" class="btn btn-sm btn-success">报告</a>` : '';
+                const envLabel = t.task_type === 'script' ? (t.script_name || '-') : (t.env || '-');
                 return `<tr>
                     <td class="mono">${t.task_id}</td>
-                    <td>${t.env}</td>
+                    <td>${typeBadge}</td>
+                    <td>${escapeHtml(envLabel)}</td>
                     <td>${statusBadge}</td>
                     <td>${summaryText}</td>
                     <td>${t.duration || '-'}</td>
                     <td>${t.created_at}</td>
-                    <td>
-                        <button class="btn btn-sm btn-outline" onclick="viewLog('${t.task_id}')">日志</button>
-                        ${reportBtn}
-                    </td>
+                    <td><button class="btn btn-sm btn-outline" onclick="viewLog('${t.task_id}')">日志</button>${reportBtn}</td>
                 </tr>`;
             }).join('');
         }
@@ -298,29 +420,10 @@
                 document.getElementById('currentTaskCard').style.display = 'block';
                 document.getElementById('logContent').textContent = data.log || '无日志';
                 document.getElementById('currentTaskId').textContent = taskId;
-                document.getElementById('currentTaskStatus').textContent = tasks_store_get_status(taskId);
-            } catch (e) {
-                showToast('获取日志失败', e.message, 'error');
-            }
+            } catch (e) { showToast('获取日志失败', e.message, 'error'); }
         }
 
-        async function tasks_store_get_status(taskId) {
-            try {
-                const resp = await fetch(`/api/status/${taskId}`);
-                const data = await resp.json();
-                return data.status;
-            } catch { return '-'; }
-        }
-
-        function toggleLog() {
-            const logEl = document.getElementById('logContent');
-            logEl.classList.toggle('collapsed');
-        }
-
-        function autoScrollLog() {
-            const logEl = document.getElementById('logContent');
-            logEl.scrollTop = logEl.scrollHeight;
-        }
+        function toggleLog() { document.getElementById('logContent').classList.toggle('collapsed'); }
 
         async function checkHealth() {
             try {

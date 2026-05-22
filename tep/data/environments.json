@@ -1,0 +1,20 @@
+[
+  {
+    "id": "test_env",
+    "name": "测试环境",
+    "base_url": "http://test-api.example.com",
+    "description": "日常测试环境",
+    "db_host": "test-mysql.internal",
+    "db_port": 3306,
+    "timeout": 30
+  },
+  {
+    "id": "staging_env",
+    "name": "预发环境",
+    "base_url": "http://staging-api.example.com",
+    "description": "预发布验证环境",
+    "db_host": "staging-mysql.internal",
+    "db_port": 3306,
+    "timeout": 30
+  }
+]
