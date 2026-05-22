@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试效能平台 TEP V1.0 - 用例管理</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="nav-logo">TEP</span>
+            <span class="nav-title">测试效能平台 V1.0</span>
+        </div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">执行中心</a>
+            <a href="/cases" class="nav-link active">用例管理</a>
+            <a href="/reports-page" class="nav-link">报告看板</a>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        <!-- 用例列表 -->
+        <section class="card">
+            <div class="card-header">
+                <h2>用例文件列表</h2>
+                <div>
+                    <button class="btn btn-sm btn-primary" onclick="showCreateModal()">+ 新建用例</button>
+                    <button class="btn btn-sm btn-outline" onclick="loadCases()">刷新</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-wrapper">
+                    <table class="data-table" id="caseTable">
+                        <thead>
+                            <tr>
+                                <th>文件名</th>
+                                <th>路径</th>
+                                <th>用例数量</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="caseTableBody">
+                            <tr><td colspan="4" class="empty-text">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- 用例编辑器 -->
+        <section class="card" id="editorCard" style="display:none;">
+            <div class="card-header">
+                <h2>编辑用例 - <span id="editingFilename">-</span></h2>
+                <div>
+                    <button class="btn btn-sm btn-success" onclick="saveCase()">保存</button>
+                    <button class="btn btn-sm btn-outline" onclick="closeEditor()">关闭</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="editor-container">
+                    <textarea id="yamlEditor" class="yaml-editor" spellcheck="false" placeholder="YAML 内容..."></textarea>
+                </div>
+                <div class="editor-hint">
+                    提示：请确保 YAML 格式正确，保存前会自动校验
+                </div>
+            </div>
+        </section>
+
+        <!-- 用例数据预览 -->
+        <section class="card" id="previewCard" style="display:none;">
+            <div class="card-header">
+                <h2>数据预览</h2>
+            </div>
+            <div class="card-body">
+                <pre class="json-preview" id="jsonPreview"></pre>
+            </div>
+        </section>
+    </main>
+
+    <!-- 新建用例弹窗 -->
+    <div class="modal-overlay" id="createModal" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>新建用例文件</h3>
+                <button class="modal-close" onclick="hideCreateModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>文件名</label>
+                    <input type="text" id="newFilename" class="form-control" placeholder="例: test_login">
+                    <small>无需输入 .yaml 后缀，系统会自动添加</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="hideCreateModal()">取消</button>
+                <button class="btn btn-primary" onclick="createCase()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+    <script>
+        let currentEditingFile = null;
+
+        // 加载用例列表
+        loadCases();
+
+        async function loadCases() {
+            try {
+                const resp = await fetch('/api/cases');
+                const data = await resp.json();
+                renderCaseTable(data.cases);
+            } catch (e) {
+                showToast('加载失败', e.message, 'error');
+            }
+        }
+
+        function renderCaseTable(cases) {
+            const tbody = document.getElementById('caseTableBody');
+            if (!cases || cases.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-text">暂无用例数据，请新建或添加 YAML 文件到 data/ 目录</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = cases.map(c => {
+                const caseCount = c.data ? (Array.isArray(c.data) ? c.data.length : (c.data.test_cases ? c.data.test_cases.length : 1)) : 0;
+                const hasError = c.error ? '<span class="badge badge-danger">解析错误</span>' : '';
+                return `<tr>
+                    <td class="mono">${c.filename} ${hasError}</td>
+                    <td>${c.path}</td>
+                    <td>${caseCount}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline" onclick="editCase('${c.filename}')">编辑</button>
+                        <button class="btn btn-sm btn-outline" onclick="previewCase('${c.filename}')">预览</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteCase('${c.filename}')">删除</button>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function editCase(filename) {
+            try {
+                const resp = await fetch(`/api/cases/${filename}`);
+                const data = await resp.json();
+
+                currentEditingFile = filename;
+                document.getElementById('editingFilename').textContent = filename;
+                document.getElementById('yamlEditor').value = data.raw_content || '';
+                document.getElementById('editorCard').style.display = 'block';
+            } catch (e) {
+                showToast('加载失败', e.message, 'error');
+            }
+        }
+
+        async function previewCase(filename) {
+            try {
+                const resp = await fetch(`/api/cases/${filename}`);
+                const data = await resp.json();
+
+                document.getElementById('jsonPreview').textContent = JSON.stringify(data.data, null, 2);
+                document.getElementById('previewCard').style.display = 'block';
+            } catch (e) {
+                showToast('预览失败', e.message, 'error');
+            }
+        }
+
+        async function saveCase() {
+            if (!currentEditingFile) return;
+
+            const content = document.getElementById('yamlEditor').value;
+            try {
+                const resp = await fetch('/api/cases/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: currentEditingFile, content }),
+                });
+                const data = await resp.json();
+
+                if (resp.ok) {
+                    showToast('保存成功', data.message, 'success');
+                    loadCases();
+                } else {
+                    showToast('保存失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('保存失败', e.message, 'error');
+            }
+        }
+
+        function closeEditor() {
+            document.getElementById('editorCard').style.display = 'none';
+            currentEditingFile = null;
+        }
+
+        function showCreateModal() {
+            document.getElementById('createModal').style.display = 'flex';
+            document.getElementById('newFilename').value = '';
+            document.getElementById('newFilename').focus();
+        }
+
+        function hideCreateModal() {
+            document.getElementById('createModal').style.display = 'none';
+        }
+
+        async function createCase() {
+            const filename = document.getElementById('newFilename').value.trim();
+            if (!filename) {
+                showToast('请输入文件名', '', 'error');
+                return;
+            }
+
+            try {
+                const resp = await fetch(`/api/cases/create?filename=${encodeURIComponent(filename)}`, {
+                    method: 'POST',
+                });
+                const data = await resp.json();
+
+                if (resp.ok) {
+                    showToast('创建成功', data.message, 'success');
+                    hideCreateModal();
+                    loadCases();
+                    // 自动打开编辑器
+                    editCase(data.filename);
+                } else {
+                    showToast('创建失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('创建失败', e.message, 'error');
+            }
+        }
+
+        async function deleteCase(filename) {
+            if (!confirm(`确定要删除 ${filename} 吗？此操作不可恢复！`)) return;
+
+            try {
+                const resp = await fetch(`/api/cases/${filename}`, { method: 'DELETE' });
+                const data = await resp.json();
+
+                if (resp.ok) {
+                    showToast('删除成功', data.message, 'success');
+                    if (currentEditingFile === filename) closeEditor();
+                    loadCases();
+                } else {
+                    showToast('删除失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('删除失败', e.message, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

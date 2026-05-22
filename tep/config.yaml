@@ -1,0 +1,16 @@
+# 环境配置文件
+test_env:
+  base_url: "http://test-api.example.com"
+  db_host: "test-mysql.internal"
+  db_port: 3306
+  redis_host: "test-redis.internal"
+  redis_port: 6379
+  timeout: 30
+
+staging_env:
+  base_url: "http://staging-api.example.com"
+  db_host: "staging-mysql.internal"
+  db_port: 3306
+  redis_host: "staging-redis.internal"
+  redis_port: 6379
+  timeout: 30
