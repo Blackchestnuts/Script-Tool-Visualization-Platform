@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试效能平台 TEP V1.0 - 报告看板</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="nav-logo">TEP</span>
+            <span class="nav-title">测试效能平台 V1.0</span>
+        </div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">执行中心</a>
+            <a href="/cases" class="nav-link">用例管理</a>
+            <a href="/reports-page" class="nav-link active">报告看板</a>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        <!-- 统计概览 -->
+        <section class="stats-row" id="statsRow">
+            <div class="stat-card">
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-label">总执行次数</div>
+            </div>
+            <div class="stat-card stat-success">
+                <div class="stat-value" id="statPassed">0</div>
+                <div class="stat-label">成功次数</div>
+            </div>
+            <div class="stat-card stat-danger">
+                <div class="stat-value" id="statFailed">0</div>
+                <div class="stat-label">失败次数</div>
+            </div>
+            <div class="stat-card stat-warning">
+                <div class="stat-value" id="statRunning">0</div>
+                <div class="stat-label">执行中</div>
+            </div>
+        </section>
+
+        <!-- 报告列表 -->
+        <section class="card">
+            <div class="card-header">
+                <h2>执行历史报告</h2>
+                <button class="btn btn-sm btn-outline" onclick="loadReports()">刷新</button>
+            </div>
+            <div class="card-body">
+                <div class="table-wrapper">
+                    <table class="data-table" id="reportTable">
+                        <thead>
+                            <tr>
+                                <th>任务 ID</th>
+                                <th>执行环境</th>
+                                <th>状态</th>
+                                <th>通过/失败/跳过</th>
+                                <th>执行时间</th>
+                                <th>报告类型</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reportTableBody">
+                            <tr><td colspan="7" class="empty-text">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Allure 报告查看器 -->
+        <section class="card" id="reportViewerCard" style="display:none;">
+            <div class="card-header">
+                <h2>Allure 报告 - <span id="viewerTaskId">-</span></h2>
+                <div>
+                    <button class="btn btn-sm btn-outline" onclick="openReportNewTab()">新窗口打开</button>
+                    <button class="btn btn-sm btn-outline" onclick="closeReportViewer()">关闭</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="iframe-container">
+                    <iframe id="reportIframe" src="" frameborder="0"></iframe>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/js/app.js"></script>
+    <script>
+        let currentReportUrl = null;
+
+        // 加载报告
+        loadReports();
+
+        async function loadReports() {
+            try {
+                const resp = await fetch('/api/reports');
+                const data = await resp.json();
+                renderReportTable(data.reports);
+                updateStats(data.reports);
+            } catch (e) {
+                showToast('加载失败', e.message, 'error');
+            }
+        }
+
+        function updateStats(reports) {
+            let total = reports.length;
+            let passed = 0, failed = 0, running = 0;
+
+            reports.forEach(r => {
+                if (r.status === 'FINISHED') {
+                    if (r.summary && r.summary.failed > 0) failed++;
+                    else passed++;
+                } else if (r.status === 'RUNNING' || r.status === 'PENDING') {
+                    running++;
+                } else if (r.status === 'ERROR') {
+                    failed++;
+                }
+            });
+
+            document.getElementById('statTotal').textContent = total;
+            document.getElementById('statPassed').textContent = passed;
+            document.getElementById('statFailed').textContent = failed;
+            document.getElementById('statRunning').textContent = running;
+        }
+
+        function renderReportTable(reports) {
+            const tbody = document.getElementById('reportTableBody');
+            if (!reports || reports.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-text">暂无执行报告，请先执行测试</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = reports.map(r => {
+                const statusBadge = getStatusBadge(r.status);
+                const summary = r.summary || {};
+                const summaryText = summary.total !== null && summary.total !== undefined
+                    ? `<span class="text-success">${summary.passed || 0}</span> / <span class="text-danger">${summary.failed || 0}</span> / <span class="text-muted">${summary.skipped || 0}</span>`
+                    : '-';
+                const reportType = r.has_html_report ? '<span class="badge badge-success">HTML</span>' : '<span class="badge badge-warning">JSON</span>';
+                const viewBtn = r.report_url
+                    ? `<button class="btn btn-sm btn-primary" onclick="viewReport('${r.task_id}', '${r.report_url}')">查看</button>`
+                    : '';
+
+                return `<tr>
+                    <td class="mono">${r.task_id}</td>
+                    <td>${r.env}</td>
+                    <td>${statusBadge}</td>
+                    <td>${summaryText}</td>
+                    <td>${r.created_at || '-'}</td>
+                    <td>${reportType}</td>
+                    <td>${viewBtn}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function viewReport(taskId, reportUrl) {
+            currentReportUrl = reportUrl;
+            document.getElementById('viewerTaskId').textContent = taskId;
+            document.getElementById('reportIframe').src = reportUrl;
+            document.getElementById('reportViewerCard').style.display = 'block';
+        }
+
+        function openReportNewTab() {
+            if (currentReportUrl) {
+                window.open(currentReportUrl, '_blank');
+            }
+        }
+
+        function closeReportViewer() {
+            document.getElementById('reportViewerCard').style.display = 'none';
+            document.getElementById('reportIframe').src = '';
+            currentReportUrl = null;
+        }
+    </script>
+</body>
+</html>

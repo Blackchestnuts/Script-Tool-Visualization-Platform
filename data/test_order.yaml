@@ -1,0 +1,45 @@
+# 订单接口测试数据
+test_module: 订单模块
+test_cases:
+  - name: 创建订单-成功
+    endpoint: /api/orders
+    method: POST
+    headers:
+      Content-Type: application/json
+      Authorization: Bearer ${token}
+    params:
+      product_id: P001
+      quantity: 2
+      address: 北京市海淀区
+    expected:
+      status_code: 200
+      body:
+        code: 0
+        message: 下单成功
+
+  - name: 库存不足-下单失败
+    endpoint: /api/orders
+    method: POST
+    headers:
+      Content-Type: application/json
+      Authorization: Bearer ${token}
+    params:
+      product_id: P999
+      quantity: 999
+      address: 北京市海淀区
+    expected:
+      status_code: 200
+      body:
+        code: 3001
+        message: 库存不足
+
+  - name: 查询订单详情-成功
+    endpoint: /api/orders/ORD20240001
+    method: GET
+    headers:
+      Authorization: Bearer ${token}
+    params: null
+    expected:
+      status_code: 200
+      body:
+        code: 0
