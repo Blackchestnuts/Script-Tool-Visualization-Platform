@@ -677,6 +677,76 @@ select.form-control {
     border-radius: 4px;
 }
 
+/* ---------- Script Types ---------- */
+.script-types-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.script-type-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: 2px solid;
+    border-radius: 9999px;
+    font-size: 13px;
+    font-weight: 500;
+    background: white;
+    transition: var(--transition);
+}
+
+.script-type-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow);
+}
+
+.type-icon {
+    font-size: 16px;
+}
+
+.type-label {
+    font-weight: 600;
+}
+
+.type-suffix {
+    color: var(--gray-500);
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.script-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 10px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.preview-cell {
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--gray-500);
+}
+
+.header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.upload-btn {
+    cursor: pointer;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 768px) {
     .navbar {

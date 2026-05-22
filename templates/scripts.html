@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试效能平台 TEP - 脚本管理</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="nav-logo">TEP</span>
+            <span class="nav-title">测试效能平台 V1.1</span>
+        </div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">执行中心</a>
+            <a href="/cases" class="nav-link">用例管理</a>
+            <a href="/scripts" class="nav-link active">脚本管理</a>
+            <a href="/reports-page" class="nav-link">报告看板</a>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        <!-- 脚本类型说明 -->
+        <section class="card">
+            <div class="card-header">
+                <h2>支持的脚本类型</h2>
+            </div>
+            <div class="card-body">
+                <div class="script-types-row" id="scriptTypesRow">
+                    <!-- JS 动态渲染 -->
+                </div>
+            </div>
+        </section>
+
+        <!-- 脚本列表 -->
+        <section class="card">
+            <div class="card-header">
+                <h2>脚本文件列表</h2>
+                <div class="header-actions">
+                    <label class="btn btn-sm btn-primary upload-btn">
+                        📤 上传脚本
+                        <input type="file" id="uploadInput" accept=".py,.sh,.bat,.ps1,.js,.rb,.lua" onchange="uploadScript()" hidden>
+                    </label>
+                    <button class="btn btn-sm btn-primary" onclick="showCreateModal()">+ 新建脚本</button>
+                    <button class="btn btn-sm btn-outline" onclick="loadScripts()">刷新</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-wrapper">
+                    <table class="data-table" id="scriptTable">
+                        <thead>
+                            <tr>
+                                <th>类型</th>
+                                <th>文件名</th>
+                                <th>大小</th>
+                                <th>修改时间</th>
+                                <th>预览</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="scriptTableBody">
+                            <tr><td colspan="6" class="empty-text">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- 脚本编辑器 -->
+        <section class="card" id="editorCard" style="display:none;">
+            <div class="card-header">
+                <h2>编辑脚本 - <span id="editingFilename">-</span></h2>
+                <div class="header-actions">
+                    <button class="btn btn-sm btn-success" onclick="saveScript()">保存</button>
+                    <button class="btn btn-sm btn-primary" onclick="runCurrentScript()">▶ 运行</button>
+                    <button class="btn btn-sm btn-outline" onclick="closeEditor()">关闭</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="editor-container">
+                    <textarea id="scriptEditor" class="yaml-editor" spellcheck="false" placeholder="脚本源码..."></textarea>
+                </div>
+            </div>
+        </section>
+
+        <!-- 脚本执行状态 -->
+        <section class="card" id="runStatusCard" style="display:none;">
+            <div class="card-header">
+                <h2>执行状态 - <span id="runScriptName">-</span></h2>
+                <span class="badge" id="runStatusBadge">PENDING</span>
+            </div>
+            <div class="card-body">
+                <div class="task-info-grid">
+                    <div class="task-info-item">
+                        <span class="info-label">任务 ID</span>
+                        <span class="info-value mono" id="runTaskId">-</span>
+                    </div>
+                    <div class="task-info-item">
+                        <span class="info-label">执行命令</span>
+                        <span class="info-value code" id="runCommand">-</span>
+                    </div>
+                    <div class="task-info-item">
+                        <span class="info-label">耗时</span>
+                        <span class="info-value" id="runDuration">-</span>
+                    </div>
+                    <div class="task-info-item">
+                        <span class="info-label">退出码</span>
+                        <span class="info-value" id="runExitCode">-</span>
+                    </div>
+                </div>
+                <div class="log-section">
+                    <div class="log-header">
+                        <span>执行日志</span>
+                        <button class="btn btn-sm btn-outline" onclick="toggleLog()">展开/折叠</button>
+                    </div>
+                    <pre class="log-content" id="runLogContent">等待执行...</pre>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- 新建脚本弹窗 -->
+    <div class="modal-overlay" id="createModal" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>新建脚本</h3>
+                <button class="modal-close" onclick="hideCreateModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>文件名（含后缀）</label>
+                    <input type="text" id="newScriptFilename" class="form-control" placeholder="例: deploy.sh、check_api.py">
+                    <small>支持: .py .sh .bat .ps1 .js .rb .lua</small>
+                </div>
+                <div class="form-group" style="margin-top:12px;">
+                    <label>脚本描述（可选，将写入文件首行注释）</label>
+                    <input type="text" id="newScriptDesc" class="form-control" placeholder="例: 自动部署脚本">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="hideCreateModal()">取消</button>
+                <button class="btn btn-primary" onclick="createScript()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 运行参数弹窗 -->
+    <div class="modal-overlay" id="runModal" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>运行脚本 - <span id="runModalFilename">-</span></h3>
+                <button class="modal-close" onclick="hideRunModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>命令行参数（可选）</label>
+                    <input type="text" id="runArgs" class="form-control" placeholder="例: --env=test --count=10">
+                    <small>参数将以空格分隔传递给脚本</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="hideRunModal()">取消</button>
+                <button class="btn btn-primary" onclick="confirmRunScript()">▶ 执行</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+    <script>
+        let currentEditingFile = null;
+        let pendingRunFilename = null;
+        let scriptPollingTimer = null;
+
+        // 加载脚本类型和脚本列表
+        loadScriptTypes();
+        loadScripts();
+
+        async function loadScriptTypes() {
+            try {
+                const resp = await fetch('/api/script-types');
+                const data = await resp.json();
+                renderScriptTypes(data.types);
+            } catch (e) {
+                console.error('加载脚本类型失败:', e);
+            }
+        }
+
+        function renderScriptTypes(types) {
+            const row = document.getElementById('scriptTypesRow');
+            row.innerHTML = types.map(t => `
+                <div class="script-type-chip" style="border-color: ${t.color}">
+                    <span class="type-icon">${t.icon}</span>
+                    <span class="type-label">${t.label}</span>
+                    <span class="type-suffix">${t.suffix}</span>
+                </div>
+            `).join('');
+        }
+
+        async function loadScripts() {
+            try {
+                const resp = await fetch('/api/scripts');
+                const data = await resp.json();
+                renderScriptTable(data.scripts);
+            } catch (e) {
+                showToast('加载失败', e.message, 'error');
+            }
+        }
+
+        function renderScriptTable(scripts) {
+            const tbody = document.getElementById('scriptTableBody');
+            if (!scripts || scripts.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-text">暂无脚本，请新建或上传脚本文件到 scripts/ 目录</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = scripts.map(s => {
+                const sizeStr = s.size < 1024 ? `${s.size} B` : `${(s.size / 1024).toFixed(1)} KB`;
+                const previewText = s.preview ? s.preview.substring(0, 80) + (s.preview.length > 80 ? '...' : '') : '-';
+                return `<tr>
+                    <td>
+                        <span class="script-type-badge" style="background: ${s.type_color}20; color: ${s.type_color}">
+                            ${s.type_icon} ${s.type_label}
+                        </span>
+                    </td>
+                    <td class="mono">${escapeHtml(s.filename)}</td>
+                    <td>${sizeStr}</td>
+                    <td>${s.modified}</td>
+                    <td class="preview-cell" title="${escapeHtml(s.preview)}">${escapeHtml(previewText)}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="showRunModal('${escapeHtml(s.filename)}')">▶ 运行</button>
+                        <button class="btn btn-sm btn-outline" onclick="editScript('${escapeHtml(s.filename)}')">编辑</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteScript('${escapeHtml(s.filename)}')">删除</button>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        // ---- 编辑 ----
+        async function editScript(filename) {
+            try {
+                const resp = await fetch(`/api/scripts/${encodeURIComponent(filename)}`);
+                const data = await resp.json();
+                currentEditingFile = filename;
+                document.getElementById('editingFilename').textContent = filename;
+                document.getElementById('scriptEditor').value = data.content || '';
+                document.getElementById('editorCard').style.display = 'block';
+            } catch (e) {
+                showToast('加载失败', e.message, 'error');
+            }
+        }
+
+        async function saveScript() {
+            if (!currentEditingFile) return;
+            const content = document.getElementById('scriptEditor').value;
+            try {
+                const resp = await fetch('/api/scripts/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: currentEditingFile, content }),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('保存成功', data.message, 'success');
+                    loadScripts();
+                } else {
+                    showToast('保存失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('保存失败', e.message, 'error');
+            }
+        }
+
+        function closeEditor() {
+            document.getElementById('editorCard').style.display = 'none';
+            currentEditingFile = null;
+        }
+
+        // ---- 运行 ----
+        function showRunModal(filename) {
+            pendingRunFilename = filename;
+            document.getElementById('runModalFilename').textContent = filename;
+            document.getElementById('runArgs').value = '';
+            document.getElementById('runModal').style.display = 'flex';
+        }
+
+        function hideRunModal() {
+            document.getElementById('runModal').style.display = 'none';
+            pendingRunFilename = null;
+        }
+
+        async function confirmRunScript() {
+            if (!pendingRunFilename) return;
+            const args = document.getElementById('runArgs').value.trim() || null;
+            hideRunModal();
+            await executeScript(pendingRunFilename, args);
+        }
+
+        async function runCurrentScript() {
+            if (!currentEditingFile) return;
+            // 先保存再运行
+            await saveScript();
+            await executeScript(currentEditingFile, null);
+        }
+
+        async function executeScript(filename, args) {
+            try {
+                const resp = await fetch('/api/scripts/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename, args }),
+                });
+                const data = await resp.json();
+
+                if (resp.ok) {
+                    showToast('已提交执行', `任务ID: ${data.task_id}`, 'success');
+                    showRunStatus(filename, data.task_id);
+                    startScriptPolling(data.task_id);
+                } else {
+                    showToast('执行失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('执行失败', e.message, 'error');
+            }
+        }
+
+        function showRunStatus(filename, taskId) {
+            const card = document.getElementById('runStatusCard');
+            card.style.display = 'block';
+            document.getElementById('runScriptName').textContent = filename;
+            document.getElementById('runTaskId').textContent = taskId;
+            document.getElementById('runStatusBadge').textContent = 'PENDING';
+            document.getElementById('runStatusBadge').className = 'badge badge-warning';
+            document.getElementById('runCommand').textContent = '-';
+            document.getElementById('runDuration').textContent = '-';
+            document.getElementById('runExitCode').textContent = '-';
+            document.getElementById('runLogContent').textContent = '等待执行...';
+        }
+
+        function startScriptPolling(taskId) {
+            if (scriptPollingTimer) clearInterval(scriptPollingTimer);
+
+            scriptPollingTimer = setInterval(async () => {
+                try {
+                    const resp = await fetch(`/api/status/${taskId}`);
+                    const data = await resp.json();
+
+                    document.getElementById('runStatusBadge').textContent = data.status;
+                    document.getElementById('runCommand').textContent = data.command || '-';
+                    document.getElementById('runDuration').textContent = data.duration || '-';
+                    document.getElementById('runExitCode').textContent = data.exit_code ?? '-';
+
+                    if (data.status === 'RUNNING') {
+                        document.getElementById('runStatusBadge').className = 'badge badge-info';
+                    } else if (data.status === 'FINISHED') {
+                        document.getElementById('runStatusBadge').className = 'badge badge-success';
+                        if (data.exit_code === 0) {
+                            showToast('执行成功', `脚本运行完毕，退出码 0`, 'success');
+                        } else {
+                            showToast('执行完成', `退出码: ${data.exit_code}`, 'error');
+                        }
+                        stopScriptPolling();
+                    } else if (data.status === 'ERROR') {
+                        document.getElementById('runStatusBadge').className = 'badge badge-danger';
+                        showToast('执行出错', `任务 ${taskId} 执行失败`, 'error');
+                        stopScriptPolling();
+                    }
+
+                    if (data.log) {
+                        document.getElementById('runLogContent').textContent = data.log;
+                        const logEl = document.getElementById('runLogContent');
+                        logEl.scrollTop = logEl.scrollHeight;
+                    }
+                } catch (e) {
+                    console.error('轮询错误:', e);
+                }
+            }, 2000);
+        }
+
+        function stopScriptPolling() {
+            if (scriptPollingTimer) {
+                clearInterval(scriptPollingTimer);
+                scriptPollingTimer = null;
+            }
+        }
+
+        // ---- 创建 ----
+        function showCreateModal() {
+            document.getElementById('createModal').style.display = 'flex';
+            document.getElementById('newScriptFilename').value = '';
+            document.getElementById('newScriptDesc').value = '';
+            document.getElementById('newScriptFilename').focus();
+        }
+
+        function hideCreateModal() {
+            document.getElementById('createModal').style.display = 'none';
+        }
+
+        async function createScript() {
+            const filename = document.getElementById('newScriptFilename').value.trim();
+            const desc = document.getElementById('newScriptDesc').value.trim();
+            if (!filename) {
+                showToast('请输入文件名', '', 'error');
+                return;
+            }
+
+            // 根据后缀生成模板
+            let content = '';
+            const suffix = filename.split('.').pop().toLowerCase();
+            if (suffix === 'py') {
+                content = `# ${desc || filename}\nimport sys\n\n\ndef main():\n    print("Hello from ${filename}")\n\n\nif __name__ == "__main__":\n    main()\n`;
+            } else if (suffix === 'sh') {
+                content = `#!/bin/bash\n# ${desc || filename}\n\necho "Hello from ${filename}"\n`;
+            } else if (suffix === 'bat') {
+                content = `@echo off\nREM ${desc || filename}\n\necho Hello from ${filename}\n`;
+            } else if (suffix === 'ps1') {
+                content = `# ${desc || filename}\nWrite-Host "Hello from ${filename}"\n`;
+            } else if (suffix === 'js') {
+                content = `// ${desc || filename}\nconsole.log("Hello from ${filename}");\n`;
+            } else if (suffix === 'rb') {
+                content = `# ${desc || filename}\nputs "Hello from ${filename}"\n`;
+            } else if (suffix === 'lua') {
+                content = `-- ${desc || filename}\nprint("Hello from ${filename}")\n`;
+            }
+
+            try {
+                const resp = await fetch('/api/scripts/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename, content, description: desc }),
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('创建成功', data.message, 'success');
+                    hideCreateModal();
+                    loadScripts();
+                    editScript(data.filename);
+                } else {
+                    showToast('创建失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('创建失败', e.message, 'error');
+            }
+        }
+
+        // ---- 上传 ----
+        async function uploadScript() {
+            const input = document.getElementById('uploadInput');
+            if (!input.files || !input.files[0]) return;
+
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const resp = await fetch('/api/scripts/upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('上传成功', data.message, 'success');
+                    loadScripts();
+                } else {
+                    showToast('上传失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('上传失败', e.message, 'error');
+            }
+
+            // 清空 input 以便重复上传同名文件
+            input.value = '';
+        }
+
+        // ---- 删除 ----
+        async function deleteScript(filename) {
+            if (!confirm(`确定要删除脚本 ${filename} 吗？此操作不可恢复！`)) return;
+            try {
+                const resp = await fetch(`/api/scripts/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('删除成功', data.message, 'success');
+                    if (currentEditingFile === filename) closeEditor();
+                    loadScripts();
+                } else {
+                    showToast('删除失败', data.detail, 'error');
+                }
+            } catch (e) {
+                showToast('删除失败', e.message, 'error');
+            }
+        }
+
+        function toggleLog() {
+            document.getElementById('runLogContent').classList.toggle('collapsed');
+        }
+    </script>
+</body>
+</html>
