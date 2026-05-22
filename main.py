@@ -1,9 +1,9 @@
 """
-测试效能平台（TEP）V1.2 - FastAPI 主应用
+测试效能平台（TEP）V1.3 - FastAPI 主应用
 ========================================
 功能模块：
 - Pytest 自动化测试执行引擎
-- YAML 用例数据管理（模块化目录结构）
+- YAML / Excel 用例数据管理（模块化目录结构，支持双格式）
 - 执行环境管理（CRUD，JSON 持久化）
 - 通用脚本管理（Python / Shell / Bat 等）
 - Allure 报告静态托管
@@ -23,10 +23,12 @@ from typing import Optional
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ============================================================
 # 全局配置
@@ -56,6 +58,9 @@ SCRIPT_TYPES = {
     ".rb": {"label": "Ruby", "command": "ruby", "icon": "💎", "color": "#cc342d"},
     ".lua": {"label": "Lua", "command": "lua", "icon": "🌙", "color": "#000080"},
 }
+
+# 用例文件支持的后缀集合
+CASE_FILE_EXTENSIONS = {".yaml", ".yml", ".xlsx"}
 
 # ============================================================
 # 任务状态存储
@@ -129,6 +134,7 @@ class CaseCreateRequest(BaseModel):
     filename: str
     module: str  # 所属模块
     content: str = ""
+    file_type: str = "yaml"  # 文件类型: yaml / excel
 
 
 class ModuleCreateRequest(BaseModel):
@@ -199,9 +205,9 @@ class TaskInfo(BaseModel):
 # FastAPI 应用实例
 # ============================================================
 app = FastAPI(
-    title="测试效能平台 TEP V1.2",
-    description="接口自动化测试 + 脚本管理 + 环境管理的 Web 管控平台",
-    version="1.2.0",
+    title="测试效能平台 TEP V1.3",
+    description="接口自动化测试 + 脚本管理 + 环境管理的 Web 管控平台（支持 YAML/Excel 双格式用例）",
+    version="1.3.0",
 )
 
 # 挂载静态文件
@@ -278,6 +284,255 @@ def get_module_dir(module_name: str) -> Path:
     return module_dir
 
 
+def get_module_cases_files(module_dir: Path) -> list:
+    """获取模块目录下所有用例文件（YAML + Excel）"""
+    files = []
+    for ext in CASE_FILE_EXTENSIONS:
+        files.extend(module_dir.glob(f"*{ext}"))
+    return sorted(files)
+
+
+def get_case_file_type(filepath: Path) -> str:
+    """根据后缀判断用例文件类型"""
+    suffix = filepath.suffix.lower()
+    if suffix == ".xlsx":
+        return "excel"
+    return "yaml"
+
+
+# ============================================================
+# Excel 解析与生成工具
+# ============================================================
+
+EXCEL_HEADERS = ["用例名称", "接口路径", "请求方法", "请求头", "请求参数", "预期状态码", "预期响应"]
+
+EXCEL_HEADER_STYLE = {
+    "font": Font(bold=True, color="FFFFFF", size=12),
+    "fill": PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid"),
+    "alignment": Alignment(horizontal="center", vertical="center", wrap_text=True),
+}
+
+EXCEL_CELL_BORDER = Border(
+    left=Side(style="thin"), right=Side(style="thin"),
+    top=Side(style="thin"), bottom=Side(style="thin"),
+)
+
+EXCEL_COL_WIDTHS = [25, 30, 12, 40, 40, 14, 40]
+
+EXAMPLE_ROWS = [
+    [
+        "正常登录-成功",
+        "/api/auth/login",
+        "POST",
+        '{"Content-Type": "application/json"}',
+        '{"username": "admin", "password": "admin123"}',
+        200,
+        '{"code": 0, "message": "登录成功"}',
+    ],
+    [
+        "密码错误-登录失败",
+        "/api/auth/login",
+        "POST",
+        '{"Content-Type": "application/json"}',
+        '{"username": "admin", "password": "wrong"}',
+        200,
+        '{"code": 1001, "message": "用户名或密码错误"}',
+    ],
+]
+
+
+def _create_excel_template(filepath: Path, module_name: str = ""):
+    """创建带标准表头的 Excel 用例模板文件"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "测试用例"
+
+    # 写入表头
+    for col, header in enumerate(EXCEL_HEADERS, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = EXCEL_HEADER_STYLE["font"]
+        cell.fill = EXCEL_HEADER_STYLE["fill"]
+        cell.alignment = EXCEL_HEADER_STYLE["alignment"]
+        cell.border = EXCEL_CELL_BORDER
+
+    # 设置列宽
+    for i, width in enumerate(EXCEL_COL_WIDTHS, 1):
+        ws.column_dimensions[chr(64 + i)].width = width
+
+    # 写入示例数据
+    example_font = Font(color="6B7280", italic=True)
+    for row_idx, row_data in enumerate(EXAMPLE_ROWS, 2):
+        for col, val in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col, value=val)
+            cell.font = example_font
+            cell.border = EXCEL_CELL_BORDER
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+    # 添加说明 Sheet
+    ws2 = wb.create_sheet(title="填写说明")
+    instructions = [
+        ["字段名称", "说明", "示例"],
+        ["用例名称", "测试用例的名称，必填", "正常登录-成功"],
+        ["接口路径", "API 接口路径，必填", "/api/auth/login"],
+        ["请求方法", "HTTP 请求方法：GET/POST/PUT/DELETE/PATCH", "POST"],
+        ["请求头", "JSON 格式的请求头，可选", '{"Content-Type": "application/json"}'],
+        ["请求参数", "JSON 格式的请求参数，可选", '{"username": "admin"}'],
+        ["预期状态码", "期望的 HTTP 响应状态码", "200"],
+        ["预期响应", "JSON 格式的预期响应体，可选", '{"code": 0}'],
+    ]
+    for row in instructions:
+        ws2.append(row)
+    ws2.column_dimensions["A"].width = 15
+    ws2.column_dimensions["B"].width = 40
+    ws2.column_dimensions["C"].width = 45
+
+    wb.save(filepath)
+
+
+def _write_cases_to_excel(filepath: Path, data: dict):
+    """将结构化数据写入 Excel 文件"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "测试用例"
+
+    # 写入表头
+    for col, header in enumerate(EXCEL_HEADERS, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = EXCEL_HEADER_STYLE["font"]
+        cell.fill = EXCEL_HEADER_STYLE["fill"]
+        cell.alignment = EXCEL_HEADER_STYLE["alignment"]
+        cell.border = EXCEL_CELL_BORDER
+
+    # 设置列宽
+    for i, width in enumerate(EXCEL_COL_WIDTHS, 1):
+        ws.column_dimensions[chr(64 + i)].width = width
+
+    test_cases = data.get("test_cases", []) if isinstance(data, dict) else []
+    for row_idx, case in enumerate(test_cases, 2):
+        expected = case.get("expected", {}) if isinstance(case.get("expected"), dict) else {}
+        row_data = [
+            case.get("name", ""),
+            case.get("endpoint", ""),
+            case.get("method", "GET"),
+            json.dumps(case.get("headers", {}), ensure_ascii=False) if case.get("headers") else "",
+            json.dumps(case.get("params", {}), ensure_ascii=False) if case.get("params") else "",
+            expected.get("status_code", ""),
+            json.dumps(expected.get("body", {}), ensure_ascii=False) if expected.get("body") else "",
+        ]
+        for col, val in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col, value=val)
+            cell.border = EXCEL_CELL_BORDER
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+    wb.save(filepath)
+
+
+def parse_excel_cases(filepath: Path, module_name: str = "") -> dict:
+    """解析 Excel 用例文件，返回结构化数据
+
+    Excel 格式要求：
+    - 第一行为表头：用例名称, 接口路径, 请求方法, 请求头, 请求参数, 预期状态码, 预期响应
+    - 从第二行起为用例数据
+    """
+    try:
+        rel_path = str(filepath.relative_to(BASE_DIR))
+    except ValueError:
+        rel_path = str(filepath)
+
+    try:
+        wb = load_workbook(filepath, read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+
+        if len(rows) < 2:
+            return {
+                "filename": filepath.name,
+                "path": rel_path,
+                "module": module_name,
+                "file_type": "excel",
+                "case_count": 0,
+                "data": {"test_module": module_name, "test_cases": []},
+            }
+
+        # 读取表头
+        header = [str(c or "").strip() for c in rows[0]]
+        test_cases = []
+
+        for row in rows[1:]:
+            if not row or not row[0]:
+                continue
+            # 将行数据映射到表头
+            row_dict = {}
+            for i, h in enumerate(header):
+                row_dict[h] = row[i] if i < len(row) else None
+
+            case_item = {
+                "name": str(row_dict.get("用例名称", "") or ""),
+                "endpoint": str(row_dict.get("接口路径", "") or ""),
+                "method": str(row_dict.get("请求方法", "GET") or "GET").upper(),
+            }
+
+            # 解析请求头（JSON 字符串）
+            headers_str = row_dict.get("请求头", "")
+            if headers_str:
+                try:
+                    case_item["headers"] = json.loads(str(headers_str))
+                except (json.JSONDecodeError, TypeError):
+                    case_item["headers"] = {"Content-Type": "application/json"}
+            else:
+                case_item["headers"] = {"Content-Type": "application/json"}
+
+            # 解析请求参数（JSON 字符串）
+            params_str = row_dict.get("请求参数", "")
+            if params_str:
+                try:
+                    case_item["params"] = json.loads(str(params_str))
+                except (json.JSONDecodeError, TypeError):
+                    case_item["params"] = str(params_str)
+            else:
+                case_item["params"] = None
+
+            # 解析预期结果
+            expected = {}
+            status_code = row_dict.get("预期状态码", "")
+            if status_code:
+                try:
+                    expected["status_code"] = int(status_code)
+                except (ValueError, TypeError):
+                    expected["status_code"] = status_code
+
+            expected_body = row_dict.get("预期响应", "")
+            if expected_body:
+                try:
+                    expected["body"] = json.loads(str(expected_body))
+                except (json.JSONDecodeError, TypeError):
+                    expected["body"] = {"message": str(expected_body)}
+
+            if expected:
+                case_item["expected"] = expected
+
+            test_cases.append(case_item)
+
+        return {
+            "filename": filepath.name,
+            "path": rel_path,
+            "module": module_name,
+            "file_type": "excel",
+            "case_count": len(test_cases),
+            "data": {"test_module": module_name, "test_cases": test_cases},
+        }
+    except Exception as e:
+        return {
+            "filename": filepath.name,
+            "path": rel_path,
+            "module": module_name,
+            "file_type": "excel",
+            "case_count": 0,
+            "error": f"Excel 解析错误: {str(e)}",
+        }
+
+
 def parse_yaml_cases(filepath: Path, module_name: str = "") -> dict:
     """解析单个 YAML 文件，返回结构化数据"""
     try:
@@ -303,6 +558,7 @@ def parse_yaml_cases(filepath: Path, module_name: str = "") -> dict:
             "filename": filepath.name,
             "path": rel_path,
             "module": module_name,
+            "file_type": "yaml",
             "case_count": case_count,
             "data": data,
         }
@@ -315,6 +571,7 @@ def parse_yaml_cases(filepath: Path, module_name: str = "") -> dict:
             "filename": filepath.name,
             "path": rel_path,
             "module": module_name,
+            "file_type": "yaml",
             "case_count": 0,
             "error": f"YAML 解析错误: {str(e)}",
         }
@@ -581,7 +838,7 @@ async def get_modules():
     # 扫描 data/ 下的子目录
     for d in sorted(DATA_DIR.iterdir()):
         if d.is_dir() and not d.name.startswith("."):
-            yaml_files = list(d.glob("*.yaml")) + list(d.glob("*.yml"))
+            case_files = get_module_cases_files(d)
             # 检查是否有模块描述文件
             desc_file = d / "_module.json"
             description = ""
@@ -593,10 +850,16 @@ async def get_modules():
                 except Exception:
                     pass
 
+            # 统计不同格式的用例数
+            yaml_count = len([f for f in case_files if f.suffix.lower() in (".yaml", ".yml")])
+            excel_count = len([f for f in case_files if f.suffix.lower() == ".xlsx"])
+
             modules.append({
                 "name": d.name,
                 "description": description,
-                "case_count": len(yaml_files),
+                "case_count": len(case_files),
+                "yaml_count": yaml_count,
+                "excel_count": excel_count,
                 "path": str(d.relative_to(BASE_DIR)),
             })
 
@@ -666,12 +929,12 @@ async def delete_module(module_name: str):
 
 
 # ============================================================
-# API 路由 - 用例管理（模块化）
+# API 路由 - 用例管理（模块化，支持 YAML/Excel 双格式）
 # ============================================================
 
 @app.get("/api/cases")
 async def get_cases(module: Optional[str] = None):
-    """获取用例列表，支持按模块过滤"""
+    """获取用例列表，支持按模块过滤，同时包含 YAML 和 Excel 用例"""
     if module:
         # 获取指定模块下的用例
         try:
@@ -681,19 +944,25 @@ async def get_cases(module: Optional[str] = None):
         if not module_dir.exists():
             raise HTTPException(status_code=404, detail=f"模块 '{module}' 不存在")
 
-        yaml_files = list(module_dir.glob("*.yaml")) + list(module_dir.glob("*.yml"))
+        case_files = get_module_cases_files(module_dir)
         cases = []
-        for f in sorted(yaml_files):
-            cases.append(parse_yaml_cases(f, module))
+        for f in case_files:
+            if f.suffix.lower() == ".xlsx":
+                cases.append(parse_excel_cases(f, module))
+            else:
+                cases.append(parse_yaml_cases(f, module))
         return {"cases": cases, "total": len(cases), "module": module}
     else:
         # 获取所有模块的所有用例
         all_cases = []
         for d in sorted(DATA_DIR.iterdir()):
             if d.is_dir() and not d.name.startswith("."):
-                yaml_files = list(d.glob("*.yaml")) + list(d.glob("*.yml"))
-                for f in sorted(yaml_files):
-                    all_cases.append(parse_yaml_cases(f, d.name))
+                case_files = get_module_cases_files(d)
+                for f in case_files:
+                    if f.suffix.lower() == ".xlsx":
+                        all_cases.append(parse_excel_cases(f, d.name))
+                    else:
+                        all_cases.append(parse_yaml_cases(f, d.name))
         # 兼容：也扫描 data/ 根目录下的 YAML（非模块化用例）
         root_yamls = [f for f in DATA_DIR.glob("*.yaml") if f.name != "environments.json"] + list(DATA_DIR.glob("*.yml"))
         for f in sorted(root_yamls):
@@ -713,15 +982,21 @@ async def get_case_detail(module: str, filename: str):
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"文件 {module}/{filename} 不存在")
 
-    case_data = parse_yaml_cases(filepath, module)
-    with open(filepath, "r", encoding="utf-8") as f:
-        case_data["raw_content"] = f.read()
+    suffix = filepath.suffix.lower()
+    if suffix == ".xlsx":
+        case_data = parse_excel_cases(filepath, module)
+        # Excel 无法直接显示 raw_content，转为 YAML 展示
+        case_data["raw_content"] = yaml.dump(case_data.get("data", {}), allow_unicode=True, default_flow_style=False)
+    else:
+        case_data = parse_yaml_cases(filepath, module)
+        with open(filepath, "r", encoding="utf-8") as f:
+            case_data["raw_content"] = f.read()
     return case_data
 
 
 @app.post("/api/cases/create")
 async def create_case(request: CaseCreateRequest):
-    """在指定模块下创建用例文件"""
+    """在指定模块下创建用例文件（支持 YAML 和 Excel 格式）"""
     try:
         module_dir = get_module_dir(request.module)
     except ValueError:
@@ -730,32 +1005,51 @@ async def create_case(request: CaseCreateRequest):
     if not module_dir.exists():
         raise HTTPException(status_code=404, detail=f"模块 '{request.module}' 不存在")
 
+    file_type = request.file_type.lower()
     filename = request.filename
-    if not filename.endswith((".yaml", ".yml")):
-        filename += ".yaml"
 
-    filepath = module_dir / filename
-    if filepath.exists():
-        raise HTTPException(status_code=400, detail=f"文件 {filename} 已存在")
-    if not str(filepath.resolve()).startswith(str(module_dir.resolve())):
-        raise HTTPException(status_code=400, detail="非法文件路径")
+    if file_type == "excel":
+        # Excel 格式
+        if not filename.endswith(".xlsx"):
+            filename += ".xlsx"
 
-    content = request.content or f"# {request.module} - {filename}\ntest_module: {request.module}\ntest_cases: []\n"
-    if content:
-        try:
-            yaml.safe_load(content)
-        except yaml.YAMLError as e:
-            raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
+        filepath = module_dir / filename
+        if filepath.exists():
+            raise HTTPException(status_code=400, detail=f"文件 {filename} 已存在")
+        if not str(filepath.resolve()).startswith(str(module_dir.resolve())):
+            raise HTTPException(status_code=400, detail="非法文件路径")
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(content)
+        # 创建带表头的空 Excel 文件
+        _create_excel_template(filepath, request.module)
 
-    return {"message": f"文件 {request.module}/{filename} 创建成功", "filename": filename, "module": request.module}
+        return {"message": f"Excel 文件 {request.module}/{filename} 创建成功", "filename": filename, "module": request.module, "file_type": "excel"}
+    else:
+        # YAML 格式（默认）
+        if not filename.endswith((".yaml", ".yml")):
+            filename += ".yaml"
+
+        filepath = module_dir / filename
+        if filepath.exists():
+            raise HTTPException(status_code=400, detail=f"文件 {filename} 已存在")
+        if not str(filepath.resolve()).startswith(str(module_dir.resolve())):
+            raise HTTPException(status_code=400, detail="非法文件路径")
+
+        content = request.content or f"# {request.module} - {filename}\ntest_module: {request.module}\ntest_cases: []\n"
+        if content:
+            try:
+                yaml.safe_load(content)
+            except yaml.YAMLError as e:
+                raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        return {"message": f"YAML 文件 {request.module}/{filename} 创建成功", "filename": filename, "module": request.module, "file_type": "yaml"}
 
 
 @app.post("/api/cases/update")
 async def update_case(request: CaseUpdateRequest):
-    """更新用例数据"""
+    """更新用例数据（支持 YAML 和 Excel 格式）"""
     module = request.module or ""
     if module:
         try:
@@ -771,17 +1065,30 @@ async def update_case(request: CaseUpdateRequest):
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"文件 {request.filename} 不存在")
 
-    try:
-        yaml.safe_load(request.content)
-    except yaml.YAMLError as e:
-        raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
+    suffix = filepath.suffix.lower()
+    if suffix == ".xlsx":
+        # Excel 文件：将 YAML 文本内容解析后写回 Excel
+        try:
+            data = yaml.safe_load(request.content)
+            _write_cases_to_excel(filepath, data)
+            return {"message": f"Excel 文件 {request.filename} 更新成功"}
+        except yaml.YAMLError as e:
+            raise HTTPException(status_code=400, detail=f"内容格式错误: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"写入 Excel 失败: {str(e)}")
+    else:
+        # YAML 文件：直接写入
+        try:
+            yaml.safe_load(request.content)
+        except yaml.YAMLError as e:
+            raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
 
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(request.content)
-        return {"message": f"文件 {request.filename} 更新成功"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"写入文件失败: {str(e)}")
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(request.content)
+            return {"message": f"文件 {request.filename} 更新成功"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"写入文件失败: {str(e)}")
 
 
 @app.delete("/api/cases/{module}/{filename}")
@@ -798,6 +1105,142 @@ async def delete_case(module: str, filename: str):
 
     filepath.unlink()
     return {"message": f"文件 {module}/{filename} 删除成功"}
+
+
+# ============================================================
+# API 路由 - Excel 用例导入 / 导出 / 模板下载
+# ============================================================
+
+@app.get("/api/cases/excel-template")
+async def download_excel_template():
+    """下载 Excel 用例导入模板"""
+    template_dir = BASE_DIR / "temp"
+    template_dir.mkdir(exist_ok=True)
+    template_path = template_dir / "用例导入模板.xlsx"
+    _create_excel_template(template_path)
+    return FileResponse(
+        path=str(template_path),
+        filename="用例导入模板.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.post("/api/cases/import-excel")
+async def import_excel_cases(
+    module: str = "",
+    file: UploadFile = File(...),
+):
+    """导入 Excel 用例文件到指定模块
+
+    - 支持上传 .xlsx 文件
+    - 自动解析 Excel 内容并保存到模块目录
+    - 同时生成对应的 YAML 版本
+    """
+    if not module:
+        raise HTTPException(status_code=400, detail="请指定导入的目标模块")
+
+    try:
+        module_dir = get_module_dir(module)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法模块名称")
+
+    if not module_dir.exists():
+        raise HTTPException(status_code=404, detail=f"模块 '{module}' 不存在")
+
+    # 检查文件类型
+    suffix = Path(file.filename).suffix.lower()
+    if suffix != ".xlsx":
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 格式的 Excel 文件")
+
+    # 保存 Excel 文件
+    import_filename = file.filename
+    filepath = module_dir / import_filename
+    if not str(filepath.resolve()).startswith(str(module_dir.resolve())):
+        raise HTTPException(status_code=400, detail="非法文件路径")
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    # 解析 Excel 内容
+    case_data = parse_excel_cases(filepath, module)
+
+    # 同时生成 YAML 版本（方便用户切换格式）
+    yaml_filename = Path(import_filename).stem + ".yaml"
+    yaml_filepath = module_dir / yaml_filename
+    if case_data.get("data") and not yaml_filepath.exists():
+        yaml_content = yaml.dump(case_data["data"], allow_unicode=True, default_flow_style=False)
+        with open(yaml_filepath, "w", encoding="utf-8") as f:
+            f.write(yaml_content)
+
+    return {
+        "message": f"Excel 文件导入成功: {module}/{import_filename}",
+        "filename": import_filename,
+        "module": module,
+        "file_type": "excel",
+        "case_count": case_data.get("case_count", 0),
+        "yaml_generated": yaml_filename if case_data.get("data") else None,
+    }
+
+
+@app.post("/api/cases/export-yaml/{module}/{filename}")
+async def export_yaml_from_excel(module: str, filename: str):
+    """将 Excel 用例导出为 YAML 格式"""
+    try:
+        module_dir = get_module_dir(module)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法模块名称")
+
+    filepath = module_dir / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"文件 {module}/{filename} 不存在")
+
+    if filepath.suffix.lower() != ".xlsx":
+        raise HTTPException(status_code=400, detail="仅支持将 Excel 文件导出为 YAML")
+
+    case_data = parse_excel_cases(filepath, module)
+    yaml_filename = Path(filename).stem + ".yaml"
+    yaml_filepath = module_dir / yaml_filename
+
+    if yaml_filepath.exists():
+        raise HTTPException(status_code=400, detail=f"YAML 文件 {yaml_filename} 已存在，请先删除")
+
+    if case_data.get("data"):
+        yaml_content = yaml.dump(case_data["data"], allow_unicode=True, default_flow_style=False)
+        with open(yaml_filepath, "w", encoding="utf-8") as f:
+            f.write(yaml_content)
+        return {"message": f"已导出 YAML 文件: {module}/{yaml_filename}", "yaml_filename": yaml_filename}
+    else:
+        raise HTTPException(status_code=400, detail="Excel 文件中无有效用例数据")
+
+
+@app.post("/api/cases/export-excel/{module}/{filename}")
+async def export_excel_from_yaml(module: str, filename: str):
+    """将 YAML 用例导出为 Excel 格式"""
+    try:
+        module_dir = get_module_dir(module)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法模块名称")
+
+    filepath = module_dir / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"文件 {module}/{filename} 不存在")
+
+    if filepath.suffix.lower() not in (".yaml", ".yml"):
+        raise HTTPException(status_code=400, detail="仅支持将 YAML 文件导出为 Excel")
+
+    case_data = parse_yaml_cases(filepath, module)
+    excel_filename = Path(filename).stem + ".xlsx"
+    excel_filepath = module_dir / excel_filename
+
+    if excel_filepath.exists():
+        raise HTTPException(status_code=400, detail=f"Excel 文件 {excel_filename} 已存在，请先删除")
+
+    if case_data.get("data"):
+        _write_cases_to_excel(excel_filepath, case_data["data"])
+        return {"message": f"已导出 Excel 文件: {module}/{excel_filename}", "excel_filename": excel_filename}
+    else:
+        raise HTTPException(status_code=400, detail="YAML 文件中无有效用例数据")
 
 
 # ============================================================
@@ -1011,7 +1454,7 @@ async def get_task_log(task_id: str, tail: Optional[int] = None):
 async def health_check():
     return {
         "status": "ok",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "running_tasks": len([t for t in tasks_store.values() if t["status"] == "RUNNING"]),
         "total_tasks": len(tasks_store),
     }

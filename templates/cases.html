@@ -10,7 +10,7 @@
     <nav class="navbar">
         <div class="nav-brand">
             <span class="nav-logo">TEP</span>
-            <span class="nav-title">测试效能平台 V1.2</span>
+            <span class="nav-title">测试效能平台 V1.3</span>
         </div>
         <div class="nav-links">
             <a href="/" class="nav-link">执行中心</a>
@@ -41,6 +41,8 @@
                     <h2 id="currentModuleTitle">请选择模块</h2>
                     <div class="header-actions" id="moduleActions" style="display:none;">
                         <button class="btn btn-sm btn-primary" onclick="showCreateCaseModal()">+ 新建用例</button>
+                        <button class="btn btn-sm btn-outline" onclick="showImportExcelModal()">导入 Excel</button>
+                        <button class="btn btn-sm btn-outline" onclick="downloadExcelTemplate()">下载模板</button>
                         <button class="btn btn-sm btn-outline" onclick="loadModuleCases()">刷新</button>
                         <button class="btn btn-sm btn-danger" onclick="deleteCurrentModule()">删除模块</button>
                     </div>
@@ -50,11 +52,26 @@
                         <p>请在左侧选择一个模块，或新建模块来管理用例</p>
                     </div>
                     <div id="casesContent" style="display:none;">
+                        <!-- 格式统计条 -->
+                        <div class="format-stats" id="formatStats" style="display:none;">
+                            <span class="format-stat-item">
+                                <span class="format-dot dot-yaml"></span>
+                                YAML: <strong id="yamlCountStat">0</strong>
+                            </span>
+                            <span class="format-stat-item">
+                                <span class="format-dot dot-excel"></span>
+                                Excel: <strong id="excelCountStat">0</strong>
+                            </span>
+                            <span class="format-stat-item">
+                                总计: <strong id="totalCountStat">0</strong>
+                            </span>
+                        </div>
                         <div class="table-wrapper">
                             <table class="data-table">
                                 <thead>
                                     <tr>
                                         <th>文件名</th>
+                                        <th>格式</th>
                                         <th>用例数量</th>
                                         <th>操作</th>
                                     </tr>
@@ -73,13 +90,17 @@
             <div class="card-header">
                 <h2>编辑用例 - <span id="editingFilename">-</span></h2>
                 <div class="header-actions">
+                    <span class="badge" id="editingFormatBadge"></span>
                     <button class="btn btn-sm btn-success" onclick="saveCase()">保存</button>
                     <button class="btn btn-sm btn-outline" onclick="closeEditor()">关闭</button>
                 </div>
             </div>
             <div class="card-body">
+                <div id="excelEditNotice" class="excel-notice" style="display:none;">
+                    Excel 文件以 YAML 格式展示，保存时自动转回 Excel。修改后点击"保存"即可。
+                </div>
                 <textarea id="yamlEditor" class="yaml-editor" spellcheck="false" placeholder="YAML 内容..."></textarea>
-                <div class="editor-hint">保存前会自动校验 YAML 格式</div>
+                <div class="editor-hint" id="editorHint">保存前会自动校验 YAML 格式</div>
             </div>
         </section>
 
@@ -119,7 +140,7 @@
         </div>
     </div>
 
-    <!-- 新建用例弹窗 -->
+    <!-- 新建用例弹窗（支持选择格式） -->
     <div class="modal-overlay" id="createCaseModal" style="display:none;">
         <div class="modal">
             <div class="modal-header">
@@ -130,7 +151,28 @@
                 <div class="form-group">
                     <label>文件名</label>
                     <input type="text" id="newCaseFilename" class="form-control" placeholder="例: test_login">
-                    <small>无需输入 .yaml 后缀</small>
+                    <small id="filenameHint">根据选择的格式自动添加后缀</small>
+                </div>
+                <div class="form-group" style="margin-top:12px;">
+                    <label>文件格式</label>
+                    <div class="format-selector">
+                        <label class="format-option" id="formatOptionYaml">
+                            <input type="radio" name="caseFileType" value="yaml" checked onchange="onFormatChange()">
+                            <span class="format-option-card">
+                                <span class="format-icon">📄</span>
+                                <span class="format-name">YAML</span>
+                                <span class="format-desc">.yaml 文件，文本编辑</span>
+                            </span>
+                        </label>
+                        <label class="format-option" id="formatOptionExcel">
+                            <input type="radio" name="caseFileType" value="excel" onchange="onFormatChange()">
+                            <span class="format-option-card">
+                                <span class="format-icon">📊</span>
+                                <span class="format-name">Excel</span>
+                                <span class="format-desc">.xlsx 文件，表格编辑</span>
+                            </span>
+                        </label>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -140,14 +182,64 @@
         </div>
     </div>
 
+    <!-- 导入 Excel 弹窗 -->
+    <div class="modal-overlay" id="importExcelModal" style="display:none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>导入 Excel 用例 - <span id="importExcelModule">-</span></h3>
+                <button class="modal-close" onclick="hideImportExcelModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="import-zone" id="importZone">
+                    <div class="import-zone-content">
+                        <span class="import-icon">📊</span>
+                        <p class="import-text">点击或拖拽 Excel 文件到此处</p>
+                        <p class="import-hint">仅支持 .xlsx 格式，导入后自动生成对应 YAML</p>
+                        <input type="file" id="excelFileInput" accept=".xlsx" style="display:none;" onchange="onExcelFileSelected(this)">
+                    </div>
+                </div>
+                <div id="importFileInfo" style="display:none;" class="import-file-info">
+                    <span class="import-file-icon">📊</span>
+                    <span class="import-file-name" id="importFileName">-</span>
+                    <button class="btn btn-sm btn-outline" onclick="clearImportFile()">移除</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="downloadExcelTemplate()">下载导入模板</button>
+                <button class="btn btn-outline" onclick="hideImportExcelModal()">取消</button>
+                <button class="btn btn-primary" id="importExcelBtn" onclick="importExcel()" disabled>导入</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
     <script>
         let currentModule = null;
         let currentEditingFile = null;
         let currentEditingModule = null;
+        let currentEditingFileType = 'yaml';
+        let selectedImportFile = null;
 
         // 初始化加载模块列表
         loadModules();
+
+        // ---- 拖拽导入区域 ----
+        document.addEventListener('DOMContentLoaded', function() {
+            const zone = document.getElementById('importZone');
+            if (zone) {
+                zone.addEventListener('click', () => document.getElementById('excelFileInput').click());
+                zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+                zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+                zone.addEventListener('drop', e => {
+                    e.preventDefault();
+                    zone.classList.remove('drag-over');
+                    const files = e.dataTransfer.files;
+                    if (files.length > 0) {
+                        handleImportFile(files[0]);
+                    }
+                });
+            }
+        });
 
         // ---- 模块管理 ----
         async function loadModules() {
@@ -196,6 +288,14 @@
                 const resp = await fetch(`/api/cases?module=${encodeURIComponent(currentModule)}`);
                 const data = await resp.json();
                 renderCaseTable(data.cases);
+
+                // 更新格式统计
+                const yamlCount = data.cases.filter(c => c.file_type !== 'excel').length;
+                const excelCount = data.cases.filter(c => c.file_type === 'excel').length;
+                document.getElementById('yamlCountStat').textContent = yamlCount;
+                document.getElementById('excelCountStat').textContent = excelCount;
+                document.getElementById('totalCountStat').textContent = data.cases.length;
+                document.getElementById('formatStats').style.display = 'flex';
             } catch (e) {
                 showToast('加载用例失败', e.message, 'error');
             }
@@ -204,19 +304,35 @@
         function renderCaseTable(cases) {
             const tbody = document.getElementById('caseTableBody');
             if (!cases || cases.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="3" class="empty-text">该模块下暂无用例，请新建</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-text">该模块下暂无用例，请新建或导入</td></tr>';
                 return;
             }
             tbody.innerHTML = cases.map(c => {
                 const hasError = c.error ? ' <span class="badge badge-danger">解析错误</span>' : '';
+                const fileType = c.file_type || 'yaml';
+                const formatBadge = fileType === 'excel'
+                    ? '<span class="badge badge-excel">Excel</span>'
+                    : '<span class="badge badge-yaml">YAML</span>';
+                const filenameNoExt = c.filename.replace(/\.(yaml|yml|xlsx)$/i, '');
+
+                // 操作按钮
+                let actionBtns = `
+                    <button class="btn btn-sm btn-outline" onclick="editCase('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')">编辑</button>
+                    <button class="btn btn-sm btn-outline" onclick="previewCase('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')">预览</button>
+                `;
+                // 格式转换按钮
+                if (fileType === 'excel') {
+                    actionBtns += `<button class="btn btn-sm btn-info" onclick="exportToYaml('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')" title="导出为 YAML">转 YAML</button>`;
+                } else {
+                    actionBtns += `<button class="btn btn-sm btn-info" onclick="exportToExcel('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')" title="导出为 Excel">转 Excel</button>`;
+                }
+                actionBtns += `<button class="btn btn-sm btn-danger" onclick="deleteCase('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')">删除</button>`;
+
                 return `<tr>
                     <td class="mono">${escapeHtml(c.filename)}${hasError}</td>
+                    <td>${formatBadge}</td>
                     <td>${c.case_count}</td>
-                    <td>
-                        <button class="btn btn-sm btn-outline" onclick="editCase('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')">编辑</button>
-                        <button class="btn btn-sm btn-outline" onclick="previewCase('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')">预览</button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteCase('${escapeHtml(currentModule)}','${escapeHtml(c.filename)}')">删除</button>
-                    </td>
+                    <td>${actionBtns}</td>
                 </tr>`;
             }).join('');
         }
@@ -261,28 +377,44 @@
                     document.getElementById('moduleActions').style.display = 'none';
                     document.getElementById('noModuleHint').style.display = 'block';
                     document.getElementById('casesContent').style.display = 'none';
+                    document.getElementById('formatStats').style.display = 'none';
                     closeEditor();
                     loadModules();
                 } else { showToast('删除失败', data.detail, 'error'); }
             } catch (e) { showToast('删除失败', e.message, 'error'); }
         }
 
+        // ---- 格式选择 ----
+        function onFormatChange() {
+            const selected = document.querySelector('input[name="caseFileType"]:checked').value;
+            const hint = document.getElementById('filenameHint');
+            if (selected === 'excel') {
+                hint.textContent = '将自动添加 .xlsx 后缀';
+            } else {
+                hint.textContent = '将自动添加 .yaml 后缀';
+            }
+        }
+
         // ---- 用例 CRUD ----
         function showCreateCaseModal() {
             document.getElementById('createCaseModule').textContent = currentModule;
             document.getElementById('newCaseFilename').value = '';
+            // 重置为 YAML 格式
+            document.querySelector('input[name="caseFileType"][value="yaml"]').checked = true;
+            onFormatChange();
             document.getElementById('createCaseModal').style.display = 'flex';
         }
         function hideCreateCaseModal() { document.getElementById('createCaseModal').style.display = 'none'; }
 
         async function createCase() {
             const filename = document.getElementById('newCaseFilename').value.trim();
+            const fileType = document.querySelector('input[name="caseFileType"]:checked').value;
             if (!filename) { showToast('请输入文件名', '', 'error'); return; }
             try {
                 const resp = await fetch('/api/cases/create', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filename, module: currentModule }),
+                    body: JSON.stringify({ filename, module: currentModule, file_type: fileType }),
                 });
                 const data = await resp.json();
                 if (resp.ok) {
@@ -290,7 +422,9 @@
                     hideCreateCaseModal();
                     loadModuleCases();
                     loadModules(); // 更新计数
-                    editCase(currentModule, data.filename);
+                    if (fileType === 'yaml') {
+                        editCase(currentModule, data.filename);
+                    }
                 } else { showToast('创建失败', data.detail, 'error'); }
             } catch (e) { showToast('创建失败', e.message, 'error'); }
         }
@@ -301,7 +435,24 @@
                 const data = await resp.json();
                 currentEditingFile = filename;
                 currentEditingModule = module;
+                currentEditingFileType = data.file_type || 'yaml';
+
                 document.getElementById('editingFilename').textContent = `${module} / ${filename}`;
+
+                // 格式标识
+                const badge = document.getElementById('editingFormatBadge');
+                if (currentEditingFileType === 'excel') {
+                    badge.className = 'badge badge-excel';
+                    badge.textContent = 'Excel';
+                    document.getElementById('excelEditNotice').style.display = 'block';
+                    document.getElementById('editorHint').textContent = 'Excel 文件以 YAML 格式展示编辑，保存时自动转回 Excel';
+                } else {
+                    badge.className = 'badge badge-yaml';
+                    badge.textContent = 'YAML';
+                    document.getElementById('excelEditNotice').style.display = 'none';
+                    document.getElementById('editorHint').textContent = '保存前会自动校验 YAML 格式';
+                }
+
                 document.getElementById('yamlEditor').value = data.raw_content || '';
                 document.getElementById('editorCard').style.display = 'block';
             } catch (e) { showToast('加载失败', e.message, 'error'); }
@@ -347,10 +498,96 @@
             } catch (e) { showToast('删除失败', e.message, 'error'); }
         }
 
+        // ---- 格式转换 ----
+        async function exportToYaml(module, filename) {
+            try {
+                const resp = await fetch(`/api/cases/export-yaml/${encodeURIComponent(module)}/${encodeURIComponent(filename)}`, { method: 'POST' });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('导出成功', data.message, 'success');
+                    loadModuleCases();
+                    loadModules();
+                } else { showToast('导出失败', data.detail, 'error'); }
+            } catch (e) { showToast('导出失败', e.message, 'error'); }
+        }
+
+        async function exportToExcel(module, filename) {
+            try {
+                const resp = await fetch(`/api/cases/export-excel/${encodeURIComponent(module)}/${encodeURIComponent(filename)}`, { method: 'POST' });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('导出成功', data.message, 'success');
+                    loadModuleCases();
+                    loadModules();
+                } else { showToast('导出失败', data.detail, 'error'); }
+            } catch (e) { showToast('导出失败', e.message, 'error'); }
+        }
+
+        // ---- Excel 导入 ----
+        function showImportExcelModal() {
+            document.getElementById('importExcelModule').textContent = currentModule;
+            clearImportFile();
+            document.getElementById('importExcelModal').style.display = 'flex';
+        }
+        function hideImportExcelModal() { document.getElementById('importExcelModal').style.display = 'none'; }
+
+        function onExcelFileSelected(input) {
+            if (input.files.length > 0) {
+                handleImportFile(input.files[0]);
+            }
+        }
+
+        function handleImportFile(file) {
+            if (!file.name.endsWith('.xlsx')) {
+                showToast('文件格式错误', '仅支持 .xlsx 格式', 'error');
+                return;
+            }
+            selectedImportFile = file;
+            document.getElementById('importZone').style.display = 'none';
+            document.getElementById('importFileInfo').style.display = 'flex';
+            document.getElementById('importFileName').textContent = file.name;
+            document.getElementById('importExcelBtn').disabled = false;
+        }
+
+        function clearImportFile() {
+            selectedImportFile = null;
+            document.getElementById('importZone').style.display = 'flex';
+            document.getElementById('importFileInfo').style.display = 'none';
+            document.getElementById('importExcelBtn').disabled = true;
+            document.getElementById('excelFileInput').value = '';
+        }
+
+        async function importExcel() {
+            if (!selectedImportFile || !currentModule) return;
+
+            const formData = new FormData();
+            formData.append('file', selectedImportFile);
+            formData.append('module', currentModule);
+
+            try {
+                const resp = await fetch('/api/cases/import-excel', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showToast('导入成功', data.message + (data.yaml_generated ? `，已生成 YAML: ${data.yaml_generated}` : ''), 'success');
+                    hideImportExcelModal();
+                    loadModuleCases();
+                    loadModules();
+                } else { showToast('导入失败', data.detail, 'error'); }
+            } catch (e) { showToast('导入失败', e.message, 'error'); }
+        }
+
+        function downloadExcelTemplate() {
+            window.open('/api/cases/excel-template', '_blank');
+        }
+
         function closeEditor() {
             document.getElementById('editorCard').style.display = 'none';
             currentEditingFile = null;
             currentEditingModule = null;
+            currentEditingFileType = 'yaml';
         }
     </script>
 </body>
